@@ -1,0 +1,7 @@
+{
+    "documentId": "9cd2d37f10a20c963aa8c3b1",
+    "outputFormat": "xml",
+    "assemblyName": "3dofs_model",
+    "mergeSTLs": "visual",
+    "useCollisions": false
+}
