@@ -25,6 +25,7 @@ def charger_calibration(fichier_pkl='calibration_intrinseque.pkl'):
     
     return camera_matrix, dist_coeffs
 
+
 def main():
     # Charger la calibration intrinsèque
     try:
