@@ -17,15 +17,15 @@ from sim_3dofs import Sim3Dofs
 # Scène MuJoCo dédiée au reaching (robot + goal marker, pas de cube)
 SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_reaching.xml")
 
-# ── Bornes de l'espace de travail pour le tirage du goal ────────────
+# Bornes de l'espace de travail pour le tirage du goal 
 GOAL_X_RANGE = (0.05, 0.20)
 GOAL_Y_RANGE = (-0.12, 0.12)
 GOAL_Z_RANGE = (0.01, 0.12)
 
-# ── Seuil de succès (m) ─────────────────────────────────────────────
+# Seuil de succès (m) 
 SUCCESS_THRESHOLD = 0.01  # 1 cm
 
-# ── Durée max d'un épisode ──────────────────────────────────────────
+# Durée max d'un épisode
 MAX_EPISODE_STEPS = 100
 
 
@@ -53,13 +53,13 @@ class ReachingEnv(gym.Env):
 
         self.render_mode = render_mode
 
-        # ── Simulation MuJoCo ───────────────────────────────────────
+        # Simulation MuJoCo 
         self.sim = Sim3Dofs(
             render_mode=render_mode,
             scene_xml=SCENE_XML,
         )
 
-        # ── Espaces ─────────────────────────────────────────────────
+        # Espaces 
         n_act = self.sim.n_actuators  # 3
 
         # Actions : positions articulaires cibles en radians
@@ -79,12 +79,12 @@ class ReachingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # ── État interne ────────────────────────────────────────────
+        # État interne 
         self._goal: np.ndarray = np.zeros(3)
         self._prev_action: np.ndarray = np.zeros(n_act)
         self._step_count: int = 0
 
-    # ── Helpers ──────────────────────────────────────────────────────
+    # Helpers 
 
     def _sample_goal(self) -> np.ndarray:
         """Tire un goal aléatoire dans l'espace de travail."""
@@ -119,8 +119,6 @@ class ReachingEnv(gym.Env):
         reward -= 0.01 * action_rate
 
         return reward, is_success
-
-    # ── API Gymnasium ────────────────────────────────────────────────
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
