@@ -54,10 +54,10 @@ class PushInHoleEnv(gym.Env):
     Action (dim 3) :
         - positions articulaires cibles (envoyees aux actionneurs MuJoCo)
 
-    Reward :
-        - -distance(cube, hole)  en xy (dense, objectif principal)
-        - -0.5 * distance(ee, cube) (incite a s'approcher du cube)
-        - + bonus si le cube tombe dans le trou
+    Reward (staged) :
+        Phase 1 : -distance(ee, cube)       (approach the cube)
+        Phase 2 : once close to cube, -distance(cube, hole) in xy
+        + bonus si le cube tombe dans le trou
         - penalite de lissage (action_rate)
     """
 
@@ -126,24 +126,28 @@ class PushInHoleEnv(gym.Env):
             qpos, ee_pos, cube_pos, ee_to_cube, cube_to_hole,
         ]).astype(np.float32)
 
+    # Distance at which the ee is considered close enough to push
+    REACH_THRESHOLD = 0.03  # 3 cm
+
     def _compute_reward(self, action: np.ndarray) -> tuple[float, bool]:
-        """Calcule la recompense et le flag de succes."""
+        """Staged reward: first reach the cube, then push it toward the hole."""
         ee_pos = self.sim.get_end_effector_pos()
         cube_pos = self.sim.get_cube_pos()
 
-        # Distance cube -> trou (en xy seulement)
+        dist_ee_cube = float(np.linalg.norm(ee_pos - cube_pos))
         dist_cube_hole = float(np.linalg.norm(cube_pos[:2] - self._hole_pos[:2]))
 
-        # Distance ee -> cube
-        dist_ee_cube = float(np.linalg.norm(ee_pos - cube_pos))
+        # Phase 1: approach the cube
+        reward = -dist_ee_cube
 
-        # Reward dense
-        reward = -dist_cube_hole - 0.5 * dist_ee_cube
+        # Phase 2: once close to the cube, reward pushing it toward the hole
+        if dist_ee_cube < self.REACH_THRESHOLD:
+            reward += 1.0 - dist_cube_hole
 
         # Succes : le cube est tombe dans le trou
         is_success = cube_pos[2] < SUCCESS_Z_THRESHOLD
         if is_success:
-            reward += 10.0
+            reward += 100.0
 
         # Penalite de lissage (action_rate)
         action_rate = float(np.sum((action - self._prev_action) ** 2))
