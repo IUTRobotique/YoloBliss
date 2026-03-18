@@ -22,7 +22,10 @@ GOAL_X_RANGE = (0.05, 0.20)
 GOAL_Y_RANGE = (-0.12, 0.12)
 GOAL_Z_RANGE = (0.01, 0.12)
 
-# Seuil de succès (m) 
+# Distance minimale du goal par rapport à la base du robot (m)
+MIN_GOAL_DIST = 0.15
+
+# Seuil de succès (m)
 SUCCESS_THRESHOLD = 0.01  # 1 cm
 
 # Durée max d'un épisode
@@ -87,12 +90,15 @@ class ReachingEnv(gym.Env):
     # Helpers 
 
     def _sample_goal(self) -> np.ndarray:
-        """Tire un goal aléatoire dans l'espace de travail."""
-        return np.array([
-            self.np_random.uniform(*GOAL_X_RANGE),
-            self.np_random.uniform(*GOAL_Y_RANGE),
-            self.np_random.uniform(*GOAL_Z_RANGE),
-        ])
+        """Tire un goal aléatoire dans l'espace de travail, pas trop proche de la base."""
+        while True:
+            goal = np.array([
+                self.np_random.uniform(*GOAL_X_RANGE),
+                self.np_random.uniform(*GOAL_Y_RANGE),
+                self.np_random.uniform(*GOAL_Z_RANGE),
+            ])
+            if np.linalg.norm(goal) >= MIN_GOAL_DIST:
+                return goal
 
     def _get_obs(self) -> np.ndarray:
         """Construit le vecteur d'observation."""
