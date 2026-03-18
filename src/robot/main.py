@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 
 import numpy as np
 from stable_baselines3 import PPO, SAC, TD3
@@ -24,6 +25,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test des modeles entraines")
     parser.add_argument("--algo", required=True, choices=ALGO_CLS.keys())
     parser.add_argument("--episodes", type=int, default=100)
+    parser.add_argument("--delay", type=float, default=0.0,
+                        help="Pause en secondes entre chaque step")
     args = parser.parse_args()
 
     model_path = os.path.join(SCRIPT_DIR, "models", args.algo, "best_model.zip")
@@ -43,6 +46,8 @@ if __name__ == "__main__":
             env.render()
             total_reward += reward
             done = terminated or truncated
+            if args.delay > 0:
+                time.sleep(args.delay)
 
         rewards.append(total_reward)
         successes.append(info["is_success"])
