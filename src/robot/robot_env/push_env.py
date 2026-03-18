@@ -31,23 +31,26 @@ MIN_CUBE_GOAL_DIST = 0.1
 SUCCESS_THRESHOLD = 0.01  # 1 cm
 
 # Maximum episode length
-MAX_EPISODE_STEPS = 100
+MAX_EPISODE_STEPS = 200
 
 
 class PushEnv(gym.Env):
     """Gymnasium env: the end effector must push a cube toward a ground goal.
 
-    Observation (dim 9):
+    Observation (dim 15):
         - qpos              (3)  joint positions
         - ee_pos            (3)  end-effector Cartesian position
-        - goal_pos - ee_pos (3)  end-effector to target vector
+        - cube_pos          (3)  cube position
+        - ee_to_cube        (3)  vector end-effector -> cube
+        - cube_to_goal      (3)  vector cube -> goal
 
     Action (dim 3):
         - target joint positions (sent to MuJoCo actuators)
 
     Reward:
-        - -distance(ee, goal)  (dense)
-        - + bonus if distance < threshold
+        - -distance(cube, goal)        (dense, main objective)
+        - -0.5 * distance(ee, cube)    (approach the cube)
+        - + bonus if cube on goal
         - smoothing penalty (action_rate)
     """
 
@@ -76,8 +79,8 @@ class PushEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Observations: qpos(3) + ee_pos(3) + (goal-ee)(3) = 9
-        obs_high = np.full(12, np.inf, dtype=np.float32)
+        # Observations: qpos(3) + ee(3) + cube(3) + ee_to_cube(3) + cube_to_goal(3) = 15
+        obs_high = np.full(15, np.inf, dtype=np.float32)
         self.observation_space = spaces.Box(
             low=-obs_high,
             high=obs_high,
@@ -107,9 +110,11 @@ class PushEnv(gym.Env):
         qpos = self.sim.get_qpos()
         ee_pos = self.sim.get_end_effector_pos()
         cube_pos = self.sim.get_cube_pos()
-        goal_diff = self._goal - cube_pos
-
-        return np.concatenate([qpos, ee_pos, cube_pos, goal_diff]).astype(np.float32)
+        ee_to_cube = cube_pos - ee_pos
+        cube_to_goal = self._goal - cube_pos
+        return np.concatenate([
+            qpos, ee_pos, cube_pos, ee_to_cube, cube_to_goal,
+        ]).astype(np.float32)
 
     def _compute_reward(self, action: np.ndarray) -> tuple[float, bool]:
         """Compute the pushing-oriented reward."""
@@ -120,11 +125,11 @@ class PushEnv(gym.Env):
 
         dist_ee_cube = float(np.linalg.norm(ee_pos - cube_pos))
 
-        reward = -dist_cube_goal - (0.1 * dist_ee_cube)
+        reward = -dist_cube_goal - 0.5 * dist_ee_cube
 
         is_success = dist_cube_goal < SUCCESS_THRESHOLD
         if is_success:
-            reward += 10.0
+            reward += 25.0
 
         action_rate = float(np.sum((action - self._prev_action) ** 2))
         reward -= 0.01 * action_rate
