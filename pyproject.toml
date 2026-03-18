@@ -16,6 +16,7 @@ dependencies = [
     "pyserial>=3.5",
     "sb3-contrib>=2.7.1",
     "stable-baselines3>=2.7.1",
+    "tensorboard>=2.20.0",
     "torch>=2.10.0",
     "ultralytics>=8.4.22",
 ]
