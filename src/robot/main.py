@@ -24,7 +24,7 @@ SCRIPT_DIR = os.path.dirname(__file__)
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test des modeles entraines")
     parser.add_argument("--algo", required=True, choices=ALGO_CLS.keys())
-    parser.add_argument("--episodes", type=int, default=100)
+    parser.add_argument("--episodes", type=int, default=50)
     parser.add_argument("--delay", type=float, default=0.0,
                         help="Pause en secondes entre chaque step")
     args = parser.parse_args()
@@ -51,10 +51,10 @@ if __name__ == "__main__":
 
         rewards.append(total_reward)
         successes.append(info["is_success"])
-        distances.append(info["distance"])
+        distances.append(info["cube_displacement"])
 
         print(f"Ep {ep+1:3d}: reward={total_reward:7.2f}  "
-              f"success={info['is_success']}  dist={info['distance']:.4f}")
+              f"success={info['is_success']}  dist={info['cube_displacement']:.4f}")
 
     env.close()
 
