@@ -26,10 +26,10 @@ GROUND_Z = 0.01
 MIN_BASE_DIST = 0.15
 
 # Success threshold: cube moved at least this far from its spawn (m)
-SUCCESS_DIST = 0.05
+SUCCESS_DIST = 0.2
 
 # Maximum episode length
-MAX_EPISODE_STEPS = 200
+MAX_EPISODE_STEPS = 100
 
 
 class PushEnv(gym.Env):
@@ -123,12 +123,12 @@ class PushEnv(gym.Env):
         reward = -dist_ee_cube
 
         # Reward any cube movement from its initial position
-        reward += 5.0 * cube_displacement
+        reward += 3.0 * cube_displacement
 
         # Success: cube moved far enough
         is_success = cube_displacement > SUCCESS_DIST
         if is_success:
-            reward += 10.0
+            reward += 30.0
 
         # Smoothing penalty
         action_rate = float(np.sum((action - self._prev_action) ** 2))
