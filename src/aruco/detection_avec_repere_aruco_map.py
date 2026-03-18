@@ -281,6 +281,9 @@ class DetectionAvecRepereA4:
         print("   - 'q' : Quitter")
         
         try:
+            self.pipeline.stop()
+            self.pipeline.start(self.config)
+
             while True:
                 # Capture des frames
                 frames = self.pipeline.wait_for_frames()
@@ -416,7 +419,7 @@ def main():
     print("="*70)
     
     # Configuration
-    yolo_model = 'runs/detect/detection_objets/weights/best.pt'
+    yolo_model = '../../runs/detect/detection_objets/weights/best.pt'
     
     print("\n📏 MESURES NÉCESSAIRES :")
     print("   1. Taille d'un marqueur ArUco (côté du carré NOIR)")

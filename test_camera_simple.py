@@ -4,7 +4,7 @@
 import cv2
 import sys
 
-camera_id = 0  # Changez à 5 pour tester la RealSense
+camera_id = 8  # Changez à 5 pour tester la RealSense
 
 print(f"Ouverture de la caméra {camera_id}...")
 

@@ -1,7 +1,7 @@
 import cv2
 
 # Open the default camera
-cam = cv2.VideoCapture(35)
+cam = cv2.VideoCapture(8)
 
 # Set the resolution to 640x480
 cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)

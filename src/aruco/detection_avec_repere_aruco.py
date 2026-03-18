@@ -217,7 +217,8 @@ class DetectionAvecRepereArUco:
         print("   - 's' : Sauvegarder la détection actuelle")
         
         detections_log = []
-        
+        self.pipeline.stop()
+        self.pipeline.start(self.config)
         try:
             while True:
                 # Capture des frames
@@ -362,7 +363,7 @@ def main():
     print("="*70)
     
     # Configuration
-    yolo_model = 'runs/detect/detection_objets/weights/best.pt'
+    yolo_model = '../../runs/detect/detection_objets/weights/best.pt'
     
     print("\n📏 Quelle est la TAILLE RÉELLE de vos marqueurs ArUco ?")
     print("   (Mesurez le côté du carré NOIR en cm)")
