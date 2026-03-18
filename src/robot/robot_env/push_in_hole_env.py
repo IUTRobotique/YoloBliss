@@ -25,8 +25,11 @@ CUBE_X_RANGE = (0.06, 0.20)
 CUBE_Y_RANGE = (-0.10, 0.10)
 CUBE_Z = 0.0135  # demi-cote du cube, pose sur le sol
 
+# Distance minimale du cube par rapport à la base du robot (m)
+MIN_BASE_DIST = 0.15
+
 # Distance min entre le cube et le trou au spawn (pour eviter qu'il tombe direct)
-MIN_CUBE_HOLE_DIST = 0.04
+MIN_CUBE_HOLE_DIST = 0.1
 
 # Seuil de succes : le cube est tombe dans le trou si son z < ce seuil
 SUCCESS_Z_THRESHOLD = -0.01
@@ -99,7 +102,7 @@ class PushInHoleEnv(gym.Env):
     # -- Helpers --
 
     def _sample_cube_pos(self) -> np.ndarray:
-        """Tire une position initiale pour le cube, assez loin du trou."""
+        """Tire une position initiale pour le cube, assez loin du trou et de la base."""
         for _ in range(100):
             pos = np.array([
                 self.np_random.uniform(*CUBE_X_RANGE),
@@ -107,9 +110,9 @@ class PushInHoleEnv(gym.Env):
                 CUBE_Z,
             ])
             dist_xy = np.linalg.norm(pos[:2] - self._hole_pos[:2])
-            if dist_xy > MIN_CUBE_HOLE_DIST:
+            if dist_xy > MIN_CUBE_HOLE_DIST and np.linalg.norm(pos) >= MIN_BASE_DIST:
                 return pos
-        # Fallback : position par defaut loin du trou
+        # Fallback : position par defaut loin du trou et de la base
         return np.array([0.10, 0.08, CUBE_Z])
 
     def _get_obs(self) -> np.ndarray:
