@@ -9,7 +9,7 @@ import time
 import numpy as np
 from stable_baselines3 import PPO, SAC, TD3
 
-from robot_env.reaching_env import ReachingEnv
+from robot_env.push_env import PushEnv
 
 ALGO_CLS = {
     "sac": SAC,
@@ -31,7 +31,7 @@ if __name__ == "__main__":
 
     model_path = os.path.join(SCRIPT_DIR, "models", args.algo, "best_model.zip")
     model = ALGO_CLS[args.algo].load(model_path)
-    env = ReachingEnv(render_mode="human")
+    env = PushEnv(render_mode="human")
 
     rewards, successes, distances = [], [], []
 

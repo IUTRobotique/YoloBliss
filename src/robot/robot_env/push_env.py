@@ -171,11 +171,10 @@ class PushEnv(gym.Env):
         terminated = is_success
         truncated = self._step_count >= MAX_EPISODE_STEPS
 
+        cube_pos = self.sim.get_cube_pos()
         info = {
             "is_success": is_success,
-            "distance": float(np.linalg.norm(
-                self.sim.get_end_effector_pos() - self._goal
-            )),
+            "dist_cube_goal": float(np.linalg.norm(cube_pos - self._goal)),
             "goal": self._goal.copy(),
         }
 
