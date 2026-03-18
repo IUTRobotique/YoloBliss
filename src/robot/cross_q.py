@@ -37,7 +37,7 @@ from stable_baselines3.common.callbacks import BaseCallback, CallbackList, EvalC
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import VecEnv
 
-from push_in_hole_env import PushInHoleEnv
+from robot_env.reaching_env import ReachingEnv
 
 #20× plus de mises à jour gradient par pas d'env qu'un SAC standard
 UTD_RATIO: int = 20
