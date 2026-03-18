@@ -134,12 +134,12 @@ def train(
         n_envs=n_envs_train,
         env_kwargs={"render_mode": render_mode},
         vec_env_cls=vec_env_cls,
-        monitor_kwargs={"info_keywords": ("is_success", "distance")}
+        monitor_kwargs={"info_keywords": ("is_success", "cube_displacement")}
     )
     eval_env: VecEnv = make_vec_env(
         make_env,
         n_envs=1,
-        monitor_kwargs={"info_keywords": ("is_success", "distance")} # <- LIGNE À AJOUTER
+        monitor_kwargs={"info_keywords": ("is_success", "cube_displacement")}
     )
     model: PPO = PPO(
         "MlpPolicy",
