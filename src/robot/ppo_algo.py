@@ -14,14 +14,17 @@ from __future__ import annotations
 
 import argparse
 import os
+from typing import Literal
 
 import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList, EvalCallback
 from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.vec_env import VecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv, VecEnv
 
-from robot_env.reaching_env import ReachingEnv
+from robot_env.push_env import PushEnv
+
+TheEnv = PushEnv
 
 #collecte on-policy sur plusieurs envs en parallèle pour diversifier les données
 N_ENVS: int = 4
@@ -51,6 +54,25 @@ MODEL_DIR: str = os.path.join(os.path.dirname(__file__), "models", "ppo")
 LOG_DIR: str = os.path.join(os.path.dirname(__file__), "logs", "ppo")
 
 
+def _setup_torch_for_cuda(device: str) -> None:
+    """Active des optimisations CUDA sûres pour accélérer les calculs PPO."""
+    if device.startswith("cuda") and torch.cuda.is_available():
+        # Sur RTX récentes, TF32 améliore nettement le débit pour peu de perte numérique.
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
+        torch.set_float32_matmul_precision("high")
+
+
+def _resolve_device(device: Literal["auto", "cpu", "cuda"]) -> str:
+    if device == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cuda" and not torch.cuda.is_available():
+        print("CUDA demandé mais non disponible. Bascule sur CPU.")
+        return "cpu"
+    return device
+
+
 class _RenderCallback(BaseCallback):
     """Appelle training_env.render() à chaque pas de collecte.
 
@@ -63,15 +85,15 @@ class _RenderCallback(BaseCallback):
         return True
 
 
-def make_env(render_mode: str | None =None) -> ReachingEnv:
-    """Crée une instance de ReachingEnv (factory pour make_vec_env).
+def make_env(render_mode: str | None =None) -> TheEnv:
+    """Crée une instance de TheEnv (factory pour make_vec_env).
     Parameters:
         render_mode (str | None): ``"human"`` pour afficher MuJoCo en temps réel,
             ``None`` pour l'entraînement headless (plus rapide).
     Returns:
-        ReachingEnv: environnement gymnasium initialisé.
+        TheEnv: environnement gymnasium initialisé.
     """
-    return ReachingEnv(render_mode=render_mode)
+    return TheEnv(render_mode=render_mode)
 
 
 def train(
@@ -79,6 +101,8 @@ def train(
     model_dir: str =MODEL_DIR,
     log_dir: str =LOG_DIR,
     render: bool =False,
+    device: Literal["auto", "cpu", "cuda"] = "auto",
+    n_envs: int = N_ENVS,
 ) -> PPO:
     """Entraîne un agent PPO sur la tâche de reaching.
 
@@ -98,19 +122,29 @@ def train(
     os.makedirs(model_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
 
+    resolved_device: str = _resolve_device(device)
+    _setup_torch_for_cuda(resolved_device)
+
     render_mode: str | None = "human" if render else None
     #en mode render : 1 seul env pour éviter N_ENVS fenêtres MuJoCo simultanées
-    n_envs_train: int = 1 if render else N_ENVS
+    n_envs_train: int = 1 if render else max(1, n_envs)
+    vec_env_cls = None if render or n_envs_train == 1 else SubprocVecEnv
     vec_env: VecEnv = make_vec_env(
         make_env,
         n_envs=n_envs_train,
         env_kwargs={"render_mode": render_mode},
+        vec_env_cls=vec_env_cls,
+        monitor_kwargs={"info_keywords": ("is_success", "distance")}
     )
-    eval_env: VecEnv = make_vec_env(make_env, n_envs=1)
-
+    eval_env: VecEnv = make_vec_env(
+        make_env,
+        n_envs=1,
+        monitor_kwargs={"info_keywords": ("is_success", "distance")} # <- LIGNE À AJOUTER
+    )
     model: PPO = PPO(
         "MlpPolicy",
         vec_env,
+        device=resolved_device,
         n_steps=N_STEPS,
         batch_size=BATCH_SIZE,
         n_epochs=N_EPOCHS,
@@ -125,6 +159,7 @@ def train(
         tensorboard_log=log_dir,
         verbose=1,
     )
+    print(f"Device: {resolved_device} | n_envs_train: {n_envs_train} | vec_env: {type(vec_env).__name__}")
 
     #sauvegarde automatique du meilleur modèle selon la récompense moyenne d'évaluation
     eval_callback: EvalCallback = EvalCallback(
@@ -160,5 +195,18 @@ if __name__ == "__main__":
         "--render", action="store_true",
         help="Affiche la simulation MuJoCo en temps réel pendant l'entraînement"
     )
+    parser.add_argument(
+        "--device", choices=["auto", "cpu", "cuda"], default="auto",
+        help="Périphérique de calcul (défaut : auto)"
+    )
+    parser.add_argument(
+        "--envs", type=int, default=N_ENVS,
+        help=f"Nombre d'environnements parallèles hors rendu (défaut : {N_ENVS})"
+    )
     args: argparse.Namespace = parser.parse_args()
-    train(total_timesteps=args.timesteps, render=args.render)
+    train(
+        total_timesteps=args.timesteps,
+        render=args.render,
+        device=args.device,
+        n_envs=args.envs,
+    )

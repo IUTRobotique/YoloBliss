@@ -1,6 +1,6 @@
-"""Environnement Gymnasium pour la tâche de Push avec le robot 3-DDL.
+"""Gymnasium environment for the Push task with the 3-DOF robot.
 
-L'effecteur final doit pousser un cube vers une position cible au sol.
+The end effector must push a cube toward a target position on the ground.
 """
 
 from __future__ import annotations
@@ -13,42 +13,42 @@ from gymnasium import spaces
 
 from sim_3dofs import Sim3Dofs
 
-# Scène MuJoCo dédiée au push (robot + cube + goal marker)
+# MuJoCo scene dedicated to push (robot + cube + goal marker)
 SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_push.xml")
 
-# Bornes de l'espace de travail pour le tirage du goal et du cube
+# Workspace bounds for sampling the goal and cube
 GOAL_X_RANGE = (0.05, 0.20)
 GOAL_Y_RANGE = (-0.12, 0.12)
 GROUND_Z = 0.01
 
-# Distance minimale du goal/cube par rapport à la base du robot (m)
+# Minimum goal/cube distance from the robot base (m)
 MIN_GOAL_DIST = 0.15
 
-# Distance minimale entre le cube et le goal pour éviter qu'ils se superposent (m)
+# Minimum distance between cube and goal to avoid overlap (m)
 MIN_CUBE_GOAL_DIST = 0.1
 
-# Seuil de succès (m)
+# Success threshold (m)
 SUCCESS_THRESHOLD = 0.01  # 1 cm
 
-# Durée max d'un épisode
+# Maximum episode length
 MAX_EPISODE_STEPS = 100
 
 
 class PushEnv(gym.Env):
-    """Env Gymnasium : l'end-effector doit pousser un cube vers un goal au sol.
+    """Gymnasium env: the end effector must push a cube toward a ground goal.
 
-    Observation (dim 9) :
-        - qpos              (3)  positions articulaires
-        - ee_pos            (3)  position cartésienne de l'effecteur
-        - goal_pos - ee_pos (3)  vecteur effecteur → cible
+    Observation (dim 9):
+        - qpos              (3)  joint positions
+        - ee_pos            (3)  end-effector Cartesian position
+        - goal_pos - ee_pos (3)  end-effector to target vector
 
-    Action (dim 3) :
-        - positions articulaires cibles (envoyées aux actionneurs MuJoCo)
+    Action (dim 3):
+        - target joint positions (sent to MuJoCo actuators)
 
-    Reward :
+    Reward:
         - -distance(ee, goal)  (dense)
-        - + bonus si distance < seuil
-        - pénalité de lissage (action_rate)
+        - + bonus if distance < threshold
+        - smoothing penalty (action_rate)
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 25}
@@ -58,16 +58,16 @@ class PushEnv(gym.Env):
 
         self.render_mode = render_mode
 
-        # Simulation MuJoCo
+        # MuJoCo simulation
         self.sim = Sim3Dofs(
             render_mode=render_mode,
             scene_xml=SCENE_XML,
         )
 
-        # Espaces
+        # Spaces
         n_act = self.sim.n_actuators  # 3
 
-        # Actions : positions articulaires cibles en radians
+        # Actions: target joint positions in radians
         act_limit = 2.618
         self.action_space = spaces.Box(
             low=-act_limit,
@@ -76,15 +76,15 @@ class PushEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Observations : qpos(3) + ee_pos(3) + (goal-ee)(3) = 9
-        obs_high = np.full(9, np.inf, dtype=np.float32)
+        # Observations: qpos(3) + ee_pos(3) + (goal-ee)(3) = 9
+        obs_high = np.full(12, np.inf, dtype=np.float32)
         self.observation_space = spaces.Box(
             low=-obs_high,
             high=obs_high,
             dtype=np.float32,
         )
 
-        # État interne
+        # Internal state
         self._goal: np.ndarray = np.zeros(3)
         self._prev_action: np.ndarray = np.zeros(n_act)
         self._step_count: int = 0
@@ -92,7 +92,7 @@ class PushEnv(gym.Env):
     # Helpers
 
     def _sample_ground_pos(self) -> np.ndarray:
-        """Position aléatoire au sol, à au moins MIN_GOAL_DIST de la base."""
+        """Random ground position, at least MIN_GOAL_DIST away from the base."""
         while True:
             pos = np.array([
                 self.np_random.uniform(*GOAL_X_RANGE),
@@ -103,26 +103,29 @@ class PushEnv(gym.Env):
                 return pos
 
     def _get_obs(self) -> np.ndarray:
-        """Construit le vecteur d'observation."""
+        """Build the observation vector including the cube."""
         qpos = self.sim.get_qpos()
         ee_pos = self.sim.get_end_effector_pos()
-        goal_diff = self._goal - ee_pos
-        return np.concatenate([qpos, ee_pos, goal_diff]).astype(np.float32)
+        cube_pos = self.sim.get_cube_pos()
+        goal_diff = self._goal - cube_pos
+
+        return np.concatenate([qpos, ee_pos, cube_pos, goal_diff]).astype(np.float32)
 
     def _compute_reward(self, action: np.ndarray) -> tuple[float, bool]:
-        """Calcule la récompense et le flag de succès."""
+        """Compute the pushing-oriented reward."""
         ee_pos = self.sim.get_end_effector_pos()
-        distance = float(np.linalg.norm(ee_pos - self.sim.get_cube_pos()))
+        cube_pos = self.sim.get_cube_pos()
 
-        # Reward dense : opposé de la distance
-        reward = -distance
+        dist_cube_goal = float(np.linalg.norm(cube_pos - self._goal))
 
-        # Bonus de succès
-        is_success = distance < SUCCESS_THRESHOLD
+        dist_ee_cube = float(np.linalg.norm(ee_pos - cube_pos))
+
+        reward = -dist_cube_goal - (0.1 * dist_ee_cube)
+
+        is_success = dist_cube_goal < SUCCESS_THRESHOLD
         if is_success:
-            reward += 1.0
+            reward += 10.0
 
-        # Pénalité de lissage (action_rate)
         action_rate = float(np.sum((action - self._prev_action) ** 2))
         reward -= 0.01 * action_rate
 
@@ -131,10 +134,10 @@ class PushEnv(gym.Env):
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
 
-        # Reset simulation (pose neutre)
+        # Reset simulation (neutral pose)
         self.sim.reset()
 
-        # Tire goal et cube au sol, en s'assurant qu'ils ne se superposent pas
+        # Sample goal and cube on the ground, ensuring they do not overlap
         self._goal = self._sample_ground_pos()
         while True:
             cube_pos = self._sample_ground_pos()
@@ -154,17 +157,17 @@ class PushEnv(gym.Env):
     def step(self, action: np.ndarray):
         action = np.asarray(action, dtype=np.float32)
 
-        # Appliquer l'action dans la simulation
+        # Apply the action in simulation
         self.sim.step(action)
         self._step_count += 1
 
         # Observation
         obs = self._get_obs()
 
-        # Récompense
+        # Reward
         reward, is_success = self._compute_reward(action)
 
-        # Terminaison
+        # Termination
         terminated = is_success
         truncated = self._step_count >= MAX_EPISODE_STEPS
 
