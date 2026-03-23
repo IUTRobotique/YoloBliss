@@ -30,11 +30,13 @@ BATCH_SIZE: int = 256
 GAMMA: float = 0.99
 TAU: float = 0.005
 LEARNING_RATE: float = 3e-4
-GRADIENT_STEPS: int = 1
+GRADIENT_STEPS: int = 100
 
 SUCCESS_RATE_TARGET: float = 0.90
 MIN_EVAL_EPISODES_FOR_SUCCESS: int = 10
 EVAL_FREQ_FOR_SUCCESS_CHECK: int = 5_000
+
+DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
 
 N_SAMPLED_GOAL: int = 4
 
@@ -227,6 +229,7 @@ def make_her_sac(env: SortingGoalEnv, log_dir: str = LOG_DIR) -> SAC:
         policy_kwargs=POLICY_KWARGS,
         tensorboard_log=log_dir,
         verbose=1,
+        device=DEVICE,
     )
 
 
