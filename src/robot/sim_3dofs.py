@@ -99,6 +99,12 @@ class Sim3Dofs:
         )
         self._has_cube: bool = _cube_body >= 0
 
+        # Id du body cylinder (−1 si absent du modèle)
+        _cylinder_body = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, "cylinder"
+        )
+        self._has_cylinder: bool = _cylinder_body >= 0
+
         # Pour la détection de contact EE–cube : body de l'end-effector et geom du cube
         self._ee_body_id: int = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_BODY, "end_effector_2"
@@ -107,6 +113,10 @@ class Sim3Dofs:
             self.model, mujoco.mjtObj.mjOBJ_GEOM, "cube_geom"
         )
         self._cube_geom_id: int = _cube_geom
+        _cylinder_geom = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_GEOM, "cylinder_geom"
+        )
+        self._cylinder_geom_id: int = _cylinder_geom
 
         # ── Buffers de délais ─────────────────────────────────────
         self._qpos_buffer: deque[np.ndarray] = deque(
@@ -240,6 +250,51 @@ class Sim3Dofs:
         self.data.qpos[n + 3 : n + 7] = quat if quat is not None else [1.0, 0.0, 0.0, 0.0]
         self.data.qvel[n : n + 6] = 0.0
 
+    # ── Cylindre ──────────────────────────────────────────────
+
+    def get_cylinder_pos(self) -> np.ndarray:
+        """Retourne la position (x, y, z) du cylindre dans le repère monde.
+
+        Lève ``RuntimeError`` si le modèle ne contient pas de body ``cylinder``
+        
+        Pour l'instant devrait n'être appelé que par sorting env.
+        """
+        if not self._has_cylinder:
+            raise RuntimeError("Ce modèle ne contient pas de body 'cylinder'.")
+        n = self.n_actuators + 7  # après le cube (pos+quat = 7)
+        return self.data.qpos[n : n + 3].copy()
+
+    def set_cylinder_pose(
+        self, pos: np.ndarray, quat: np.ndarray | None = None
+    ) -> None:
+        """Positionne le cylindre ; orientation identité si ``quat`` est None.
+
+        Lève ``RuntimeError`` si le modèle ne contient pas de body ``cylinder``.
+        """
+        if not self._has_cylinder:
+            raise RuntimeError("Ce modèle ne contient pas de body 'cylinder'.")
+        n = self.n_actuators + 7
+        self.data.qpos[n : n + 3] = pos
+        self.data.qpos[n + 3 : n + 7] = quat if quat is not None else [1.0, 0.0, 0.0, 0.0]
+        self.data.qvel[n : n + 6] = 0.0
+
+    def ee_touches_cylinder(self) -> bool:
+        """Retourne True si un geom du body end_effector_2 est en contact avec cylinder_geom."""
+        if not self._has_cylinder or self._cylinder_geom_id < 0 or self._ee_body_id < 0:
+            return False
+        for i in range(self.data.ncon):
+            c = self.data.contact[i]
+            g1, g2 = int(c.geom1), int(c.geom2)
+            if g1 == self._cylinder_geom_id:
+                if self.model.geom_bodyid[g2] == self._ee_body_id:
+                    return True
+            elif g2 == self._cylinder_geom_id:
+                if self.model.geom_bodyid[g1] == self._ee_body_id:
+                    return True
+        return False
+
+    # ── End-effector ─────────────────────────────────────────
+
     def get_end_effector_pos(self) -> np.ndarray:
         """Retourne la position cartésienne de l'end-effector (copie)."""
         return self.data.site_xpos[self._site_id].copy()
@@ -271,6 +326,16 @@ class Sim3Dofs:
         """Déplace la sphère du goal marker vers la position ``pos``."""
         if self._goal_mocap_id >= 0:
             self.data.mocap_pos[self._goal_mocap_id] = pos
+
+    def set_named_marker(self, body_name: str, pos: np.ndarray) -> None:
+        """Déplace un marqueur mocap identifié par le nom de son body."""
+        body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, body_name
+        )
+        if body_id >= 0:
+            mocap_id = int(self.model.body_mocapid[body_id])
+            if mocap_id >= 0:
+                self.data.mocap_pos[mocap_id] = pos
 
     # ── Espace de travail ────────────────────────────────────────
 
