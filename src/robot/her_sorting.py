@@ -1,7 +1,8 @@
-"""Surcouche HER (Hindsight Experience Replay) pour SlidingEnv.
+"""Surcouche HER (Hindsight Experience Replay) pour SortingEnv.
 
-Wrapper GoalEnv avec un seul objet (cube) et une cible.
-achieved_goal (3) = cube_pos, desired_goal (3) = goal_pos.
+Wrapper GoalEnv avec deux objets (cube + cylindre) et deux cibles.
+achieved_goal (6) = [cube_pos(3), cylinder_pos(3)]
+desired_goal  (6) = [goal_cube(3), goal_cylinder(3)]
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.her.her_replay_buffer import HerReplayBuffer
 
-from robot_env.sliding_env import SlidingEnv, SUCCESS_THRESHOLD
+from robot_env.sorting_env import SortingEnv, SUCCESS_THRESHOLD
 
 TOTAL_TIMESTEPS: int = 1_000_000_000_000_000
 BUFFER_SIZE: int = 1_000_000
@@ -42,8 +43,8 @@ POLICY_KWARGS: dict[str, object] = {
     "activation_fn": torch.nn.ReLU,
 }
 
-MODEL_DIR: str = os.path.join(os.path.dirname(__file__), "models", "her_sac_sliding")
-LOG_DIR: str = os.path.join(os.path.dirname(__file__), "logs", "her_sac_sliding")
+MODEL_DIR: str = os.path.join(os.path.dirname(__file__), "models", "her_sac_sorting")
+LOG_DIR: str = os.path.join(os.path.dirname(__file__), "logs", "her_sac_sorting")
 
 
 class _RenderCallback(BaseCallback):
@@ -87,12 +88,12 @@ class _SuccessStoppingCallback(BaseCallback):
         return True
 
 
-class SlidingGoalEnv(gym.Env):
-    """Adaptateur GoalEnv de SlidingEnv pour HerReplayBuffer.
+class SortingGoalEnv(gym.Env):
+    """Adaptateur GoalEnv de SortingEnv pour HerReplayBuffer.
 
     observation   (6) : qpos(3) + ee_pos(3)
-    achieved_goal (3) : cube_pos (position courante du cube)
-    desired_goal  (3) : goal_pos (cible ou le cube doit glisser)
+    achieved_goal (6) : cube_pos(3) + cylinder_pos(3)
+    desired_goal  (6) : goal_cube(3) + goal_cylinder(3)
     """
 
     metadata: dict[str, Any] = {"render_modes": ["human", "rgb_array"], "render_fps": 25}
@@ -100,10 +101,10 @@ class SlidingGoalEnv(gym.Env):
     def __init__(self, render_mode: str | None = None) -> None:
         super().__init__()
         self.render_mode = render_mode
-        self._inner = SlidingEnv(render_mode=render_mode)
+        self._inner = SortingEnv(render_mode=render_mode)
 
         obs_dim = 6   # qpos(3) + ee_pos(3)
-        goal_dim = 3  # cube_pos(3)
+        goal_dim = 6  # cube_pos(3) + cylinder_pos(3)
 
         obs_high = np.full(obs_dim, np.inf, dtype=np.float32)
         goal_high = np.full(goal_dim, np.inf, dtype=np.float32)
@@ -119,10 +120,13 @@ class SlidingGoalEnv(gym.Env):
         qpos = self._inner.sim.get_qpos()
         ee_pos = self._inner.sim.get_end_effector_pos()
         cube_pos = self._inner.sim.get_cube_pos()
+        cylinder_pos = self._inner.sim.get_cylinder_pos()
         return {
             "observation":   np.concatenate([qpos, ee_pos]).astype(np.float32),
-            "achieved_goal": cube_pos.astype(np.float32),
-            "desired_goal":  self._inner._goal.astype(np.float32),
+            "achieved_goal": np.concatenate([cube_pos, cylinder_pos]).astype(np.float32),
+            "desired_goal":  np.concatenate([
+                self._inner._goal_cube, self._inner._goal_cylinder,
+            ]).astype(np.float32),
         }
 
     def compute_reward(
@@ -131,19 +135,36 @@ class SlidingGoalEnv(gym.Env):
         desired_goal: np.ndarray,
         info: dict[str, Any],
     ) -> np.ndarray:
-        """Recompense relabellisable : -dist_xy(cube, goal) + bonus succes."""
-        dist_xy = np.linalg.norm(
+        """Recompense relabellisable pour HER.
+
+        achieved_goal (6) : [cube_pos(3), cylinder_pos(3)]
+        desired_goal  (6) : [goal_cube(3), goal_cylinder(3)]
+        """
+        dist_cube = np.linalg.norm(
             achieved_goal[..., :2] - desired_goal[..., :2], axis=-1
         ).astype(np.float32)
-        reward = -dist_xy
-        reward += 50.0 * (dist_xy < SUCCESS_THRESHOLD).astype(np.float32)
+        dist_cyl = np.linalg.norm(
+            achieved_goal[..., 3:5] - desired_goal[..., 3:5], axis=-1
+        ).astype(np.float32)
+
+        reward = -dist_cube - dist_cyl
+
+        cube_sorted = (dist_cube < SUCCESS_THRESHOLD).astype(np.float32)
+        cyl_sorted = (dist_cyl < SUCCESS_THRESHOLD).astype(np.float32)
+        reward += 20.0 * cube_sorted
+        reward += 20.0 * cyl_sorted
+        reward += 50.0 * (cube_sorted * cyl_sorted)
+
         return reward
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)
         self._inner.reset(seed=seed, options=options)
         obs = self._build_obs()
-        return obs, {"goal": self._inner._goal.copy()}
+        return obs, {
+            "goal_cube": self._inner._goal_cube.copy(),
+            "goal_cylinder": self._inner._goal_cylinder.copy(),
+        }
 
     def step(self, action: np.ndarray):
         _, _, terminated, truncated, inner_info = self._inner.step(action)
@@ -151,20 +172,30 @@ class SlidingGoalEnv(gym.Env):
         obs = self._build_obs()
         ee_pos = self._inner.sim.get_end_effector_pos()
         cube_pos = self._inner.sim.get_cube_pos()
+        cylinder_pos = self._inner.sim.get_cylinder_pos()
 
         # Recompense relabellisable
-        goal_reward = float(self.compute_reward(cube_pos, self._inner._goal, {}))
+        achieved = np.concatenate([cube_pos, cylinder_pos]).astype(np.float32)
+        desired = np.concatenate([
+            self._inner._goal_cube, self._inner._goal_cylinder,
+        ]).astype(np.float32)
+        goal_reward = float(self.compute_reward(achieved, desired, {}))
 
-        # Terme d'approche NON relabellisable (ee -> cube)
-        dist_ee_cube = float(np.linalg.norm(ee_pos - cube_pos))
-        approach_reward = -2.0 * dist_ee_cube
+        # Terme d'approche NON relabellisable (ee -> objet le plus eloigne de sa cible)
+        dist_cube_goal = float(np.linalg.norm(cube_pos[:2] - self._inner._goal_cube[:2]))
+        dist_cyl_goal = float(np.linalg.norm(cylinder_pos[:2] - self._inner._goal_cylinder[:2]))
+        target_obj = cube_pos if dist_cube_goal >= dist_cyl_goal else cylinder_pos
+        dist_ee_target = float(np.linalg.norm(ee_pos - target_obj))
+        approach_reward = -2.0 * dist_ee_target
 
         reward = goal_reward + approach_reward
 
         info: dict[str, Any] = {
             "is_success": inner_info["is_success"],
+            "cube_sorted": inner_info["cube_sorted"],
+            "cylinder_sorted": inner_info["cylinder_sorted"],
             "dist_cube_goal": inner_info["dist_cube_goal"],
-            "has_contacted": inner_info["has_contacted"],
+            "dist_cylinder_goal": inner_info["dist_cylinder_goal"],
         }
         return obs, reward, terminated, truncated, info
 
@@ -175,7 +206,7 @@ class SlidingGoalEnv(gym.Env):
         self._inner.close()
 
 
-def make_her_sac(env: SlidingGoalEnv, log_dir: str = LOG_DIR) -> SAC:
+def make_her_sac(env: SortingGoalEnv, log_dir: str = LOG_DIR) -> SAC:
     return SAC(
         "MultiInputPolicy",
         env,
@@ -199,8 +230,8 @@ def make_her_sac(env: SlidingGoalEnv, log_dir: str = LOG_DIR) -> SAC:
     )
 
 
-def make_env(render_mode: str | None = None) -> SlidingGoalEnv:
-    return SlidingGoalEnv(render_mode=render_mode)
+def make_env(render_mode: str | None = None) -> SortingGoalEnv:
+    return SortingGoalEnv(render_mode=render_mode)
 
 
 def train(
@@ -213,7 +244,7 @@ def train(
     os.makedirs(log_dir, exist_ok=True)
 
     print("\n" + "="*70)
-    print("ENTRAINEMENT SAC+HER - Sliding")
+    print("ENTRAINEMENT SAC+HER - Sorting")
     print("="*70)
     print(f"Limite timesteps: {total_timesteps:,}")
     print(f"Objectif succes: {SUCCESS_RATE_TARGET:.0%}")
@@ -260,7 +291,7 @@ def train(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="SAC+HER Sliding (MuJoCo)")
+    parser = argparse.ArgumentParser(description="SAC+HER Sorting (MuJoCo)")
     parser.add_argument("--timesteps", type=int, default=TOTAL_TIMESTEPS)
     parser.add_argument("--render", action="store_true")
     args = parser.parse_args()
