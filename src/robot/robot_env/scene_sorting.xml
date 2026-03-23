@@ -1,0 +1,66 @@
+<mujoco model="scene_sorting">
+    <include file="robot.xml" />
+
+    <visual>
+        <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0" />
+        <rgba haze="0.15 0.25 0.35 1" />
+        <global azimuth="160" elevation="-20" />
+    </visual>
+
+    <asset>
+        <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0"
+            width="512" height="3072" />
+        <texture type="2d" name="groundplane" builtin="checker" mark="edge"
+            rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8"
+            width="300" height="300" />
+        <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5"
+            reflectance="0.2" />
+        <!-- Zone cible pour le cube (orange) -->
+        <material name="goal_cube_mat" rgba="1 0.5 0.0 0.65" />
+        <!-- Zone cible pour le cylindre (bleu) -->
+        <material name="goal_cylinder_mat" rgba="0.2 0.4 1.0 0.65" />
+        <!-- Cube PLA (orange) -->
+        <material name="cube_mat" rgba="1 0.55 0.1 1" />
+        <!-- Cylindre PLA (bleu) -->
+        <material name="cylinder_mat" rgba="0.1 0.3 0.9 1" />
+    </asset>
+
+    <worldbody>
+        <light pos="0 0 3.5" dir="0 0 -1" directional="true" />
+        <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane"
+            material="groundplane" />
+
+        <!-- Zone cible du cube : disque orange -->
+        <body name="goal_cube_marker" mocap="true" pos="0.20 -0.06 0.0005">
+            <geom type="cylinder" size="0.03 0.0005" material="goal_cube_mat"
+                contype="0" conaffinity="0" group="2" />
+        </body>
+
+        <!-- Zone cible du cylindre : disque bleu -->
+        <body name="goal_cylinder_marker" mocap="true" pos="0.20 0.06 0.0005">
+            <geom type="cylinder" size="0.03 0.0005" material="goal_cylinder_mat"
+                contype="0" conaffinity="0" group="2" />
+        </body>
+
+        <!-- Cube 27x27x27 mm, masse 5 g (PLA) -->
+        <body name="cube" pos="0.12 0.04 0.0135">
+            <freejoint name="cube_free" />
+            <inertial pos="0 0 0" mass="0.005"
+                diaginertia="6.075e-7 6.075e-7 6.075e-7" />
+            <geom name="cube_geom" type="box" size="0.0135 0.0135 0.0135"
+                material="cube_mat" friction="0.6 0.02 0.001" />
+        </body>
+
+        <!-- Cylindre h=27mm, r=13.5mm, masse 5 g (PLA) -->
+        <!-- Inertie cylindre plein : Ixx=Iyy = m*(3r²+h²)/12, Izz = m*r²/2 -->
+        <!-- Ixx = 0.005*(3*0.0135² + 0.027²)/12 ≈ 5.316e-7 -->
+        <!-- Izz = 0.005*0.0135²/2 ≈ 4.556e-7 -->
+        <body name="cylinder" pos="0.12 -0.04 0.0135">
+            <freejoint name="cylinder_free" />
+            <inertial pos="0 0 0" mass="0.005"
+                diaginertia="5.316e-7 5.316e-7 4.556e-7" />
+            <geom name="cylinder_geom" type="cylinder" size="0.0135 0.0135"
+                material="cylinder_mat" friction="0.6 0.02 0.001" />
+        </body>
+    </worldbody>
+</mujoco>
