@@ -1,28 +1,27 @@
-"""Surcouche HER (Hindsight Experience Replay) pour SlidingEnv.
+"""Script d'entrainement SAC pour PushEnv et SlidingEnv.
 
-Wrapper GoalEnv avec un seul objet (cube) et une cible.
-achieved_goal (3) = cube_pos, desired_goal (3) = goal_pos.
+Ces deux environnements n'ont pas de goal (juste du deplacement),
+donc HER ne s'applique pas. On utilise SAC standard.
+
+Usage :
+    python her.py --env sliding
+    python her.py --env push --render
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-from typing import Any
 
-import numpy as np
 import torch
-import gymnasium as gym
-from gymnasium import spaces
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList, EvalCallback
 from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.vec_env import VecEnv
-from stable_baselines3.her.her_replay_buffer import HerReplayBuffer
 
-from robot_env.sliding_env import SlidingEnv, SUCCESS_THRESHOLD
+from robot_env.push_env import PushEnv
+from robot_env.sliding_env import SlidingEnv
 
-TOTAL_TIMESTEPS: int = 1_000_000_000_000_000
+TOTAL_TIMESTEPS: int = 300_000
 BUFFER_SIZE: int = 1_000_000
 LEARNING_STARTS: int = 1_000
 BATCH_SIZE: int = 256
@@ -31,19 +30,15 @@ TAU: float = 0.005
 LEARNING_RATE: float = 3e-4
 GRADIENT_STEPS: int = 1
 
-SUCCESS_RATE_TARGET: float = 0.90
-MIN_EVAL_EPISODES_FOR_SUCCESS: int = 10
-EVAL_FREQ_FOR_SUCCESS_CHECK: int = 5_000
-
-N_SAMPLED_GOAL: int = 4
-
 POLICY_KWARGS: dict[str, object] = {
     "net_arch": [256, 256],
     "activation_fn": torch.nn.ReLU,
 }
 
-MODEL_DIR: str = os.path.join(os.path.dirname(__file__), "models", "her_sac_sliding")
-LOG_DIR: str = os.path.join(os.path.dirname(__file__), "logs", "her_sac_sliding")
+ENVS = {
+    "push": PushEnv,
+    "sliding": SlidingEnv,
+}
 
 
 class _RenderCallback(BaseCallback):
@@ -52,132 +47,24 @@ class _RenderCallback(BaseCallback):
         return True
 
 
-class _SuccessStoppingCallback(BaseCallback):
-    def __init__(self, success_rate_target: float = 0.90, verbose: int = 0):
-        super().__init__()
-        self.success_rate_target = success_rate_target
-        self.verbose = verbose
-        self.best_success_rate = 0.0
-        self.last_check_timestep = 0
+def train(
+    env_name: str = "sliding",
+    total_timesteps: int = TOTAL_TIMESTEPS,
+    render: bool = False,
+):
+    env_cls = ENVS[env_name]
 
-    def _on_step(self) -> bool:
-        current_timesteps = self.model.num_timesteps
-        if current_timesteps - self.last_check_timestep < EVAL_FREQ_FOR_SUCCESS_CHECK:
-            return True
-        self.last_check_timestep = current_timesteps
-        if current_timesteps > LEARNING_STARTS and len(self.model.ep_info_buffer) > 0:
-            recent_episodes = list(self.model.ep_info_buffer)
-            if len(recent_episodes) >= MIN_EVAL_EPISODES_FOR_SUCCESS:
-                sample_size = min(MIN_EVAL_EPISODES_FOR_SUCCESS * 2, len(recent_episodes))
-                recent_episodes = recent_episodes[-sample_size:]
-                successes = sum(
-                    1 for ep in recent_episodes
-                    if "is_success" in ep and ep["is_success"]
-                )
-                success_rate = successes / len(recent_episodes)
-                if success_rate > self.best_success_rate:
-                    self.best_success_rate = success_rate
-                    if self.verbose > 0:
-                        print(f"\nTimestep {current_timesteps:,} | Success: {success_rate:.1%} | Best: {self.best_success_rate:.1%}")
-                if success_rate >= self.success_rate_target:
-                    if self.verbose > 0:
-                        print(f"\nOBJECTIF ATTEINT! Success rate: {success_rate:.1%}")
-                        print(f"   Entrainement arrete apres {current_timesteps:,} timesteps")
-                    return False
-        return True
+    model_dir = os.path.join(os.path.dirname(__file__), "models", f"sac_{env_name}")
+    log_dir = os.path.join(os.path.dirname(__file__), "logs", f"sac_{env_name}")
+    os.makedirs(model_dir, exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
 
+    render_mode = "human" if render else None
+    env = env_cls(render_mode=render_mode)
+    eval_env = make_vec_env(lambda: env_cls(), n_envs=1)
 
-class SlidingGoalEnv(gym.Env):
-    """Adaptateur GoalEnv de SlidingEnv pour HerReplayBuffer.
-
-    observation   (6) : qpos(3) + ee_pos(3)
-    achieved_goal (3) : cube_pos (position courante du cube)
-    desired_goal  (3) : goal_pos (cible ou le cube doit glisser)
-    """
-
-    metadata: dict[str, Any] = {"render_modes": ["human", "rgb_array"], "render_fps": 25}
-
-    def __init__(self, render_mode: str | None = None) -> None:
-        super().__init__()
-        self.render_mode = render_mode
-        self._inner = SlidingEnv(render_mode=render_mode)
-
-        obs_dim = 6   # qpos(3) + ee_pos(3)
-        goal_dim = 3  # cube_pos(3)
-
-        obs_high = np.full(obs_dim, np.inf, dtype=np.float32)
-        goal_high = np.full(goal_dim, np.inf, dtype=np.float32)
-
-        self.observation_space = spaces.Dict({
-            "observation":   spaces.Box(-obs_high, obs_high, dtype=np.float32),
-            "achieved_goal": spaces.Box(-goal_high, goal_high, dtype=np.float32),
-            "desired_goal":  spaces.Box(-goal_high, goal_high, dtype=np.float32),
-        })
-        self.action_space = self._inner.action_space
-
-    def _build_obs(self) -> dict[str, np.ndarray]:
-        qpos = self._inner.sim.get_qpos()
-        ee_pos = self._inner.sim.get_end_effector_pos()
-        cube_pos = self._inner.sim.get_cube_pos()
-        return {
-            "observation":   np.concatenate([qpos, ee_pos]).astype(np.float32),
-            "achieved_goal": cube_pos.astype(np.float32),
-            "desired_goal":  self._inner._goal.astype(np.float32),
-        }
-
-    def compute_reward(
-        self,
-        achieved_goal: np.ndarray,
-        desired_goal: np.ndarray,
-        info: dict[str, Any],
-    ) -> np.ndarray:
-        """Recompense relabellisable : -dist_xy(cube, goal) + bonus succes."""
-        dist_xy = np.linalg.norm(
-            achieved_goal[..., :2] - desired_goal[..., :2], axis=-1
-        ).astype(np.float32)
-        reward = -dist_xy
-        reward += 50.0 * (dist_xy < SUCCESS_THRESHOLD).astype(np.float32)
-        return reward
-
-    def reset(self, *, seed: int | None = None, options: dict | None = None):
-        super().reset(seed=seed)
-        self._inner.reset(seed=seed, options=options)
-        obs = self._build_obs()
-        return obs, {"goal": self._inner._goal.copy()}
-
-    def step(self, action: np.ndarray):
-        _, _, terminated, truncated, inner_info = self._inner.step(action)
-
-        obs = self._build_obs()
-        ee_pos = self._inner.sim.get_end_effector_pos()
-        cube_pos = self._inner.sim.get_cube_pos()
-
-        # Recompense relabellisable
-        goal_reward = float(self.compute_reward(cube_pos, self._inner._goal, {}))
-
-        # Terme d'approche NON relabellisable (ee -> cube)
-        dist_ee_cube = float(np.linalg.norm(ee_pos - cube_pos))
-        approach_reward = -2.0 * dist_ee_cube
-
-        reward = goal_reward + approach_reward
-
-        info: dict[str, Any] = {
-            "is_success": inner_info["is_success"],
-            "dist_cube_goal": inner_info["dist_cube_goal"],
-            "has_contacted": inner_info["has_contacted"],
-        }
-        return obs, reward, terminated, truncated, info
-
-    def render(self):
-        return self._inner.render()
-
-    def close(self) -> None:
-        self._inner.close()
-
-
-def make_her_sac(env: SlidingGoalEnv, log_dir: str = LOG_DIR) -> SAC:
-    return SAC(
-        "MultiInputPolicy",
+    model = SAC(
+        "MlpPolicy",
         env,
         buffer_size=BUFFER_SIZE,
         learning_starts=LEARNING_STARTS,
@@ -186,73 +73,26 @@ def make_her_sac(env: SlidingGoalEnv, log_dir: str = LOG_DIR) -> SAC:
         tau=TAU,
         learning_rate=LEARNING_RATE,
         gradient_steps=GRADIENT_STEPS,
-        ent_coef="auto",
-        target_entropy="auto",
-        replay_buffer_class=HerReplayBuffer,
-        replay_buffer_kwargs={
-            "n_sampled_goal": N_SAMPLED_GOAL,
-            "goal_selection_strategy": "future",
-        },
         policy_kwargs=POLICY_KWARGS,
         tensorboard_log=log_dir,
         verbose=1,
     )
 
-
-def make_env(render_mode: str | None = None) -> SlidingGoalEnv:
-    return SlidingGoalEnv(render_mode=render_mode)
-
-
-def train(
-    total_timesteps: int = TOTAL_TIMESTEPS,
-    model_dir: str = MODEL_DIR,
-    log_dir: str = LOG_DIR,
-    render: bool = False,
-) -> SAC:
-    os.makedirs(model_dir, exist_ok=True)
-    os.makedirs(log_dir, exist_ok=True)
-
-    print("\n" + "="*70)
-    print("ENTRAINEMENT SAC+HER - Sliding")
-    print("="*70)
-    print(f"Limite timesteps: {total_timesteps:,}")
-    print(f"Objectif succes: {SUCCESS_RATE_TARGET:.0%}")
-    print("="*70 + "\n")
-
-    render_mode = "human" if render else None
-    env = make_env(render_mode=render_mode)
-    eval_env = make_vec_env(make_env, n_envs=1)
-
-    model = make_her_sac(env, log_dir=log_dir)
-
     eval_callback = EvalCallback(
         eval_env,
         best_model_save_path=model_dir,
         log_path=log_dir,
-        eval_freq=EVAL_FREQ_FOR_SUCCESS_CHECK,
-        n_eval_episodes=MIN_EVAL_EPISODES_FOR_SUCCESS,
+        eval_freq=5_000,
+        n_eval_episodes=20,
         deterministic=True,
     )
-    success_callback = _SuccessStoppingCallback(
-        success_rate_target=SUCCESS_RATE_TARGET, verbose=1,
-    )
 
-    callbacks: list[BaseCallback] = [eval_callback, success_callback]
+    callbacks: list[BaseCallback] = [eval_callback]
     if render:
         callbacks.append(_RenderCallback())
 
-    try:
-        model.learn(total_timesteps=total_timesteps, callback=CallbackList(callbacks))
-    except KeyboardInterrupt:
-        print("\nEntrainement interrompu par l'utilisateur")
-
-    model.save(os.path.join(model_dir, "her_sac_final"))
-
-    print("\n" + "="*70)
-    print("ENTRAINEMENT TERMINE")
-    print(f"   Model sauvegarde: {model_dir}/her_sac_final.zip")
-    print(f"   Logs TensorBoard: {log_dir}")
-    print("="*70 + "\n")
+    model.learn(total_timesteps=total_timesteps, callback=CallbackList(callbacks))
+    model.save(os.path.join(model_dir, f"sac_{env_name}_final"))
 
     env.close()
     eval_env.close()
@@ -260,8 +100,12 @@ def train(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="SAC+HER Sliding (MuJoCo)")
+    parser = argparse.ArgumentParser(description="SAC pour Push / Sliding (MuJoCo)")
+    parser.add_argument(
+        "--env", choices=list(ENVS.keys()), default="sliding",
+        help="Environnement (push ou sliding)",
+    )
     parser.add_argument("--timesteps", type=int, default=TOTAL_TIMESTEPS)
     parser.add_argument("--render", action="store_true")
     args = parser.parse_args()
-    train(total_timesteps=args.timesteps, render=args.render)
+    train(env_name=args.env, total_timesteps=args.timesteps, render=args.render)

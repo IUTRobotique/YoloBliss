@@ -1,8 +1,11 @@
 """Environnement Gymnasium pour la tache de Sliding avec le robot 3-DDL.
 
 L'effecteur final doit cogner le cube pour lui donner une impulsion.
-Le cube doit ensuite glisser par inertie jusqu'a la position cible,
-sans que l'effecteur ne reste en contact.
+Le cube doit ensuite glisser par inertie loin de sa position initiale.
+
+Comme PushEnv, pas de goal : on recompense le deplacement du cube.
+Difference avec push : apres le contact, on recompense l'effecteur
+qui s'eloigne du cube, forcant l'agent a frapper puis reculer.
 """
 
 from __future__ import annotations
@@ -15,72 +18,50 @@ from gymnasium import spaces
 
 from sim_3dofs import Sim3Dofs
 
-# Meme scene que push (robot + cube + disque cible)
+# Meme scene que push (robot + cube)
 SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_push.xml")
 
 # Bornes pour le tirage aleatoire de la position du cube
-CUBE_X_RANGE = (0.06, 0.18)
-CUBE_Y_RANGE = (-0.10, 0.10)
+CUBE_X_RANGE = (0.05, 0.20)
+CUBE_Y_RANGE = (-0.12, 0.12)
 CUBE_Z = 0.0135
 
-# Bornes pour le tirage de la cible (plus loin que le cube)
-GOAL_X_RANGE = (0.10, 0.22)
-GOAL_Y_RANGE = (-0.12, 0.12)
-GOAL_Z = 0.0005
-
 # Distance minimale par rapport a la base du robot (m)
-MIN_BASE_DIST = 0.1
+MIN_BASE_DIST = 0.10
 
-# Distance min entre le cube et la cible au spawn (m)
-MIN_CUBE_GOAL_DIST = 0.03
-
-# Seuil de succes : cube a moins de cette distance de la cible (m)
-SUCCESS_THRESHOLD = 0.05
+# Succes : cube deplace d'au moins cette distance depuis sa position initiale (m)
+SUCCESS_DIST = 0.05
 
 # Duree max d'un episode
-MAX_EPISODE_STEPS = 200
+MAX_EPISODE_STEPS = 100
+
+# Seuil de deplacement pour considerer que le cube a ete touche (m)
+CONTACT_DISPLACEMENT = 0.005
+
+# Nombre de steps de grace apres le premier contact (pour laisser le temps de frapper)
+GRACE_STEPS = 5
 
 # Coefficient de penalite pour le lissage des actions
 ACTION_RATE_COEFF = 0.01
 
-# Penalite temporelle par step
-STEP_TIME_PENALTY = 0.01
-
-# Nombre de steps apres le premier contact pendant lesquels l'EE peut toucher le cube
-# Au-dela, chaque step de contact est penalise (forcer l'impulsion courte)
-CONTACT_GRACE_STEPS = 15
-
-# Penalite par step de contact prolonge apres la grace period
-PROLONGED_CONTACT_PENALTY = 0.3
-
-# Curriculum : nombre d'episodes avant d'atteindre la difficulte max
-CURRICULUM_EPISODES = 3000
-
-# Seuil de saturation de l'approche (m)
-APPROACH_SATURATION_DIST = 0.03
-
 
 class SlidingEnv(gym.Env):
-    """Env Gymnasium : cogner le cube pour le faire glisser vers la cible.
+    """Env Gymnasium : cogner le cube pour le faire glisser.
 
-    La difference avec PushEnv est que l'agent doit donner une impulsion
-    courte et bien dosee, pas un contact prolonge. Le contact est penalise
-    apres une courte grace period.
-
-    Observation (dim 15) :
+    Observation (dim 9) :
         - qpos              (3)  positions articulaires
         - ee_pos            (3)  position cartesienne de l'effecteur
         - cube_pos          (3)  position du cube
-        - ee_to_cube        (3)  vecteur effecteur -> cube
-        - cube_to_goal      (3)  vecteur cube -> cible
 
     Action (dim 3) :
         - positions articulaires cibles (envoyees aux actionneurs MuJoCo)
 
     Reward :
-        Phase 1 (avant contact) : approche du cube
-        Phase 2 (apres contact) : distance cube -> cible
-        Penalite si contact prolonge (forcer l'impulsion)
+        Avant contact : -dist(ee, cube)            approcher le cube
+        Pendant frappe (5 steps) : +3.0 * displacement   frapper fort
+        Apres grace : +3.0 * displacement, -5.0 si colle  degager
+        Succes : +30 si displacement > SUCCESS_DIST
+        Lissage : -0.01 * ||a_t - a_{t-1}||^2
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 25}
@@ -105,8 +86,8 @@ class SlidingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # qpos(3) + ee(3) + cube(3) + ee_to_cube(3) + cube_to_goal(3) = 15
-        obs_high = np.full(15, np.inf, dtype=np.float32)
+        # qpos(3) + ee(3) + cube(3) = 9
+        obs_high = np.full(9, np.inf, dtype=np.float32)
         self.observation_space = spaces.Box(
             low=-obs_high,
             high=obs_high,
@@ -114,17 +95,15 @@ class SlidingEnv(gym.Env):
         )
 
         # Etat interne
-        self._goal: np.ndarray = np.zeros(3)
+        self._cube_init: np.ndarray = np.zeros(3)
         self._prev_action: np.ndarray = np.zeros(n_act)
         self._step_count: int = 0
-        self._episode_count: int = 0
-        self._first_contact_step: int = -1  # -1 = pas encore de contact
-        self._has_contacted: bool = False
-        self._prev_dist_cube_goal: float = 0.0
+        self._contact_step: int = -1  # step ou le premier contact a eu lieu
 
     # -- Helpers --
 
     def _sample_cube_pos(self) -> np.ndarray:
+        """Position aleatoire au sol, assez loin de la base."""
         for _ in range(200):
             pos = np.array([
                 self.np_random.uniform(*CUBE_X_RANGE),
@@ -135,136 +114,73 @@ class SlidingEnv(gym.Env):
                 return pos
         return np.array([0.12, 0.0, CUBE_Z])
 
-    def _current_max_goal_dist(self) -> float:
-        """Distance max cube-cible selon la progression du curriculum."""
-        progress = min(1.0, self._episode_count / float(CURRICULUM_EPISODES))
-        # De 0.04m (tres proche) a 0.15m (distance max)
-        return 0.04 + progress * 0.11
-
-    def _sample_goal(self, cube_pos: np.ndarray) -> np.ndarray:
-        max_dist = self._current_max_goal_dist()
-        for _ in range(200):
-            goal = np.array([
-                self.np_random.uniform(*GOAL_X_RANGE),
-                self.np_random.uniform(*GOAL_Y_RANGE),
-                GOAL_Z,
-            ])
-            dist = np.linalg.norm(goal[:2] - cube_pos[:2])
-            if MIN_CUBE_GOAL_DIST <= dist <= max_dist:
-                return goal
-        # Fallback : placer le goal proche du cube
-        offset = self.np_random.uniform(-0.04, 0.04, size=2)
-        return np.array([
-            np.clip(cube_pos[0] + offset[0], *GOAL_X_RANGE),
-            np.clip(cube_pos[1] + offset[1], *GOAL_Y_RANGE),
-            GOAL_Z,
-        ])
-
     def _get_obs(self) -> np.ndarray:
+        """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
         qpos = self.sim.get_qpos()
         ee_pos = self.sim.get_end_effector_pos()
         cube_pos = self.sim.get_cube_pos()
-        ee_to_cube = cube_pos - ee_pos
-        cube_to_goal = self._goal - cube_pos
+
+        qpos = qpos + self.np_random.normal(0, 0.005, size=qpos.shape)
+        cube_pos = cube_pos + self.np_random.normal(0, 0.002, size=cube_pos.shape)
+
         return np.concatenate([
-            qpos, ee_pos, cube_pos, ee_to_cube, cube_to_goal,
+            qpos, ee_pos, cube_pos,
         ]).astype(np.float32)
 
     def _compute_reward(self, action: np.ndarray) -> tuple[float, bool]:
+        """Reward : approcher, frapper, reculer.
+
+        Avant contact : -dist(ee, cube)  → approcher
+        Pendant la frappe (GRACE_STEPS) : +displacement → frapper fort
+        Apres la grace : +displacement, -5.0 si encore colle → degage
+        """
         ee_pos = self.sim.get_end_effector_pos()
         cube_pos = self.sim.get_cube_pos()
 
         dist_ee_cube = float(np.linalg.norm(ee_pos - cube_pos))
-        dist_cube_goal = float(np.linalg.norm(cube_pos[:2] - self._goal[:2]))
+        cube_displacement = float(np.linalg.norm(cube_pos - self._cube_init))
 
-        is_touching = self.sim.ee_touches_cube()
+        cube_touched = cube_displacement > CONTACT_DISPLACEMENT
 
-        # Detecter le premier contact
-        if is_touching and not self._has_contacted:
-            self._has_contacted = True
-            self._first_contact_step = self._step_count
-
-        reward = 0.0
-
-        if not self._has_contacted:
-            # Phase 1 : approcher le cube
-            approach_dist = max(0.0, dist_ee_cube - APPROACH_SATURATION_DIST)
-            reward = -2.0 * approach_dist
+        if not cube_touched:
+            # Phase approche : aller vers le cube
+            reward = -dist_ee_cube
         else:
-            # Phase 2 : recompenser la proximite cube -> cible
-            reward = -5.0 * dist_cube_goal
+            # Enregistrer le step du premier contact
+            if self._contact_step < 0:
+                self._contact_step = self._step_count
 
-            # Reward de progres : le cube se rapproche de la cible
-            progress = self._prev_dist_cube_goal - dist_cube_goal
-            reward += 30.0 * progress
+            reward = 10.0 * cube_displacement
 
-            # Penaliser le contact prolonge (apres la grace period)
-            if is_touching:
-                steps_since_contact = self._step_count - self._first_contact_step
-                if steps_since_contact > CONTACT_GRACE_STEPS:
-                    reward -= PROLONGED_CONTACT_PENALTY
+            # Apres la periode de grace : penaliser si encore colle
+            steps_since_contact = self._step_count - self._contact_step
+            if steps_since_contact > GRACE_STEPS and dist_ee_cube < 0.03:
+                reward -= 1.0
 
-        # Succes
-        is_success = dist_cube_goal < SUCCESS_THRESHOLD
+        # Succes : cube deplace assez loin
+        is_success = cube_displacement > SUCCESS_DIST
         if is_success:
-            reward += 100.0
+            reward += 30.0
 
-        # Pression temporelle
-        reward -= STEP_TIME_PENALTY
-
-        # Lissage
+        # Lissage des commandes
         action_rate = float(np.sum((action - self._prev_action) ** 2))
         reward -= ACTION_RATE_COEFF * action_rate
 
-        self._prev_dist_cube_goal = dist_cube_goal
-
         return reward, is_success
-
-    # -- Protocole HER --
-
-    def get_achieved_goal(self) -> np.ndarray:
-        return self.sim.get_cube_pos().astype(np.float32)
-
-    def get_desired_goal(self) -> np.ndarray:
-        return self._goal.astype(np.float32)
-
-    @property
-    def goal_dim(self) -> int:
-        return 3
-
-    @staticmethod
-    def compute_goal_reward(
-        achieved_goal: np.ndarray, desired_goal: np.ndarray
-    ) -> np.ndarray:
-        dist_xy = np.linalg.norm(
-            achieved_goal[..., :2] - desired_goal[..., :2], axis=-1
-        ).astype(np.float32)
-        reward = -dist_xy
-        reward += 50.0 * (dist_xy < SUCCESS_THRESHOLD).astype(np.float32)
-        return reward
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         self.sim.reset()
 
-        cube_pos = self._sample_cube_pos()
-        self._goal = self._sample_goal(cube_pos)
-
-        self.sim.set_cube_pose(pos=cube_pos)
+        self._cube_init = self._sample_cube_pos()
+        self.sim.set_cube_pose(pos=self._cube_init.copy())
         self.sim.forward()
-        self.sim.set_goal_marker(self._goal)
 
         self._prev_action = np.zeros(self.sim.n_actuators)
         self._step_count = 0
-        self._episode_count += 1
-        self._first_contact_step = -1
-        self._has_contacted = False
-        self._prev_dist_cube_goal = float(np.linalg.norm(cube_pos[:2] - self._goal[:2]))
+        self._contact_step = -1
 
-        info = {
-            "cube_pos": cube_pos.copy(),
-            "goal": self._goal.copy(),
-        }
+        info = {"cube_init": self._cube_init.copy()}
         return self._get_obs(), info
 
     def step(self, action: np.ndarray):
@@ -282,8 +198,7 @@ class SlidingEnv(gym.Env):
         cube_pos = self.sim.get_cube_pos()
         info = {
             "is_success": is_success,
-            "dist_cube_goal": float(np.linalg.norm(cube_pos[:2] - self._goal[:2])),
-            "has_contacted": self._has_contacted,
+            "cube_displacement": float(np.linalg.norm(cube_pos - self._cube_init)),
         }
 
         self._prev_action = action.copy()

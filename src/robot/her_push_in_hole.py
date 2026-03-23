@@ -86,7 +86,7 @@ class PushInHoleGoalEnv(gym.Env):
     lors du relabelling, puis appeler ``compute_reward`` pour recalculer la
     récompense de la transition relabellisée.
     L'état robot est séparé du but pour éviter que l'agent apprenne à exploiter
-    les vecteurs dérivés du but (ee_to_cube, cube_to_hole) contenus dans
+    les vecteurs dérivés du but (cube_to_hole) contenus dans
     l'observation brute de PushInHoleEnv.
     """
 

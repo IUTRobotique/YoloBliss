@@ -35,11 +35,10 @@ MAX_EPISODE_STEPS = 100
 class PushEnv(gym.Env):
     """Gymnasium env: the end effector must reach the cube and push it.
 
-    Observation (dim 12):
+    Observation (dim 9):
         - qpos              (3)  joint positions
         - ee_pos            (3)  end-effector Cartesian position
         - cube_pos          (3)  cube position
-        - ee_to_cube        (3)  vector end-effector -> cube
 
     Action (dim 3):
         - target joint positions (sent to MuJoCo actuators)
@@ -75,8 +74,8 @@ class PushEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Observations: qpos(3) + ee(3) + cube(3) + ee_to_cube(3) = 12
-        obs_high = np.full(12, np.inf, dtype=np.float32)
+        # Observations: qpos(3) + ee(3) + cube(3) = 9
+        obs_high = np.full(9, np.inf, dtype=np.float32)
         self.observation_space = spaces.Box(
             low=-obs_high,
             high=obs_high,
@@ -106,9 +105,8 @@ class PushEnv(gym.Env):
         qpos = self.sim.get_qpos()
         ee_pos = self.sim.get_end_effector_pos()
         cube_pos = self.sim.get_cube_pos()
-        ee_to_cube = cube_pos - ee_pos
         return np.concatenate([
-            qpos, ee_pos, cube_pos, ee_to_cube,
+            qpos, ee_pos, cube_pos,
         ]).astype(np.float32)
 
     def _compute_reward(self, action: np.ndarray) -> tuple[float, bool]:
