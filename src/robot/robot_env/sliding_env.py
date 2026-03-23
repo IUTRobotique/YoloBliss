@@ -21,16 +21,16 @@ from sim_3dofs import Sim3Dofs
 # Meme scene que push (robot + cube)
 SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_push.xml")
 
-# Bornes pour le tirage aleatoire de la position du cube
-CUBE_X_RANGE = (0.05, 0.20)
-CUBE_Y_RANGE = (-0.12, 0.12)
+# Tirage en anneau autour du robot
 CUBE_Z = 0.0135
-
-# Distance minimale par rapport a la base du robot (m)
-MIN_BASE_DIST = 0.10
+CUBE_DIST_MIN = 0.08   # pas trop pres de la base (m)
+CUBE_DIST_MAX = 0.20   # portee max du robot (m)
 
 # Succes : cube deplace d'au moins cette distance depuis sa position initiale (m)
 SUCCESS_DIST = 0.05
+
+# Succes : effecteur doit etre a cette distance du cube pour valider le succes (m)
+SUCCESS_EE_DIST = 0.02
 
 # Duree max d'un episode
 MAX_EPISODE_STEPS = 100
@@ -103,16 +103,10 @@ class SlidingEnv(gym.Env):
     # -- Helpers --
 
     def _sample_cube_pos(self) -> np.ndarray:
-        """Position aleatoire au sol, assez loin de la base."""
-        for _ in range(200):
-            pos = np.array([
-                self.np_random.uniform(*CUBE_X_RANGE),
-                self.np_random.uniform(*CUBE_Y_RANGE),
-                CUBE_Z,
-            ])
-            if np.linalg.norm(pos[:2]) >= MIN_BASE_DIST:
-                return pos
-        return np.array([0.12, 0.0, CUBE_Z])
+        """Position aleatoire en anneau autour du robot."""
+        angle = self.np_random.uniform(-np.pi, np.pi)
+        dist = self.np_random.uniform(CUBE_DIST_MIN, CUBE_DIST_MAX)
+        return np.array([dist * np.cos(angle), dist * np.sin(angle), CUBE_Z])
 
     def _get_obs(self) -> np.ndarray:
         """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
@@ -157,8 +151,10 @@ class SlidingEnv(gym.Env):
             if steps_since_contact > GRACE_STEPS and dist_ee_cube < 0.03:
                 reward -= 1.0
 
-        # Succes : cube deplace assez loin
-        is_success = cube_displacement > SUCCESS_DIST
+        # Succes : cube deplace assez loin ET effecteur loin du cube
+        # (pour valider que le cube a glisse seul apres le coup)
+        is_success = (cube_displacement > SUCCESS_DIST and 
+                     dist_ee_cube > SUCCESS_EE_DIST)
         if is_success:
             reward += 30.0
 

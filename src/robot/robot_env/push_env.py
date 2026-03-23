@@ -17,13 +17,10 @@ from sim_3dofs import Sim3Dofs
 # MuJoCo scene dedicated to push (robot + cube)
 SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_push.xml")
 
-# Workspace bounds for sampling the cube
-CUBE_X_RANGE = (0.05, 0.20)
-CUBE_Y_RANGE = (-0.12, 0.12)
+# Tirage en anneau autour du robot
 GROUND_Z = 0.01
-
-# Minimum cube distance from the robot base (m)
-MIN_BASE_DIST = 0.15
+CUBE_DIST_MIN = 0.08   # pas trop pres de la base (m)
+CUBE_DIST_MAX = 0.20   # portee max du robot (m)
 
 # Success threshold: cube moved at least this far from its spawn (m)
 SUCCESS_DIST = 0.2
@@ -90,15 +87,10 @@ class PushEnv(gym.Env):
     # Helpers
 
     def _sample_ground_pos(self) -> np.ndarray:
-        """Random ground position, at least MIN_BASE_DIST away from the base."""
-        while True:
-            pos = np.array([
-                self.np_random.uniform(*CUBE_X_RANGE),
-                self.np_random.uniform(*CUBE_Y_RANGE),
-                GROUND_Z,
-            ])
-            if np.linalg.norm(pos) >= MIN_BASE_DIST:
-                return pos
+        """Random ground position in an annulus around the robot base."""
+        angle = self.np_random.uniform(-np.pi, np.pi)
+        dist = self.np_random.uniform(CUBE_DIST_MIN, CUBE_DIST_MAX)
+        return np.array([dist * np.cos(angle), dist * np.sin(angle), GROUND_Z])
 
     def _get_obs(self) -> np.ndarray:
         """Build the observation vector."""

@@ -17,13 +17,11 @@ from sim_3dofs import Sim3Dofs
 # Scène MuJoCo dédiée au reaching (robot + goal marker, pas de cube)
 SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_reaching.xml")
 
-# Bornes de l'espace de travail pour le tirage du goal 
-GOAL_X_RANGE = (0.05, 0.20)
-GOAL_Y_RANGE = (-0.12, 0.12)
-GOAL_Z_RANGE = (0.01, 0.12)
-
-# Distance minimale du goal par rapport à la base du robot (m)
-MIN_GOAL_DIST = 0.15
+# Tirage du goal en anneau autour du robot
+GOAL_DIST_MIN = 0.08   # pas trop pres de la base (m)
+GOAL_DIST_MAX = 0.20   # portee max du robot (m)
+GOAL_Z_MIN = 0.01      # au-dessus du sol (m)
+GOAL_Z_MAX = 0.12      # hauteur max atteignable (m)
 
 # Seuil de succès (m)
 SUCCESS_THRESHOLD = 0.01  # 1 cm
@@ -90,15 +88,11 @@ class ReachingEnv(gym.Env):
     # Helpers 
 
     def _sample_goal(self) -> np.ndarray:
-        """Tire un goal aléatoire dans l'espace de travail, pas trop proche de la base."""
-        while True:
-            goal = np.array([
-                self.np_random.uniform(*GOAL_X_RANGE),
-                self.np_random.uniform(*GOAL_Y_RANGE),
-                self.np_random.uniform(*GOAL_Z_RANGE),
-            ])
-            if np.linalg.norm(goal) >= MIN_GOAL_DIST:
-                return goal
+        """Tire un goal aléatoire en anneau autour du robot, au-dessus du sol."""
+        angle = self.np_random.uniform(-np.pi, np.pi)
+        dist = self.np_random.uniform(GOAL_DIST_MIN, GOAL_DIST_MAX)
+        z = self.np_random.uniform(GOAL_Z_MIN, GOAL_Z_MAX)
+        return np.array([dist * np.cos(angle), dist * np.sin(angle), z])
 
     def _get_obs(self) -> np.ndarray:
         """Construit le vecteur d'observation."""
@@ -120,7 +114,7 @@ class ReachingEnv(gym.Env):
         if is_success:
             reward += 1.0
 
-        # Pénalité de lissage (action_rate)
+        # Pénalité de lissage (mouvements brusques)
         action_rate = float(np.sum((action - self._prev_action) ** 2))
         reward -= 0.01 * action_rate
 

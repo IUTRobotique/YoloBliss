@@ -25,25 +25,16 @@ SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_sorting.xml")
 GOAL_CUBE_POS = np.array([0.20, -0.06, 0.0])
 GOAL_CYLINDER_POS = np.array([0.20, 0.06, 0.0])
 
-# Bornes pour le tirage aleatoire des positions initiales des objets
-OBJ_X_RANGE = (0.06, 0.20)
-OBJ_Y_RANGE = (-0.10, 0.10)
-OBJ_Z = 0.0135  # demi-cote, pose sur le sol
-
-# Distance minimale par rapport a la base du robot (m)
-MIN_BASE_DIST = 0.15
-
-# Distance min entre les deux objets au spawn (m)
-MIN_OBJ_DIST = 0.04
+# Tirage en anneau autour du robot
+OBJ_Z = 0.0135
+OBJ_DIST_MIN = 0.10   # pas trop pres de la base (m)
+OBJ_DIST_MAX = 0.20   # portee max du robot (m)
 
 # Seuil de succes : objet a moins de cette distance de sa cible (m)
 SUCCESS_THRESHOLD = 0.05
 
 # Duree max d'un episode
 MAX_EPISODE_STEPS = 400
-
-# Distance max objets-cibles au spawn (m)
-MAX_OBJ_GOAL_DIST = 0.12
 
 # Coefficient de penalite pour le lissage des actions (idem push_in_hole)
 ACTION_RATE_COEFF = 0.01
@@ -119,20 +110,11 @@ class SortingEnv(gym.Env):
 
     # -- Helpers --
 
-    def _sample_near_goal(self, goal: np.ndarray) -> np.ndarray:
-        """Tire une position proche d'un goal mais pas dessus."""
-        for _ in range(100):
-            offset = self.np_random.uniform(-MAX_OBJ_GOAL_DIST, MAX_OBJ_GOAL_DIST, size=2)
-            pos = np.array([
-                np.clip(goal[0] + offset[0], *OBJ_X_RANGE),
-                np.clip(goal[1] + offset[1], *OBJ_Y_RANGE),
-                OBJ_Z,
-            ])
-            # Ne pas spawn sur le goal (sinon succes instantane)
-            if np.linalg.norm(pos[:2] - goal[:2]) >= SUCCESS_THRESHOLD:
-                return pos
-        # Fallback : position decalee du goal
-        return np.array([goal[0] - 0.06, goal[1], OBJ_Z])
+    def _sample_obj_pos(self) -> np.ndarray:
+        """Position aleatoire en anneau autour du robot."""
+        angle = self.np_random.uniform(-np.pi, np.pi)
+        dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
+        return np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
 
     def _choose_target(self) -> str:
         """Choisit quel objet cibler : celui qui n'est PAS encore trie.
@@ -262,13 +244,13 @@ class SortingEnv(gym.Env):
         super().reset(seed=seed)
         self.sim.reset()
 
-        cube_pos = self._sample_near_goal(self._goal_cube)
-        cylinder_pos = self._sample_near_goal(self._goal_cylinder)
+        cube_pos = self._sample_obj_pos()
+        cylinder_pos = self._sample_obj_pos()
         # Verifier que les objets ne se chevauchent pas
         for _ in range(50):
-            if np.linalg.norm(cube_pos[:2] - cylinder_pos[:2]) >= MIN_OBJ_DIST:
+            if np.linalg.norm(cube_pos[:2] - cylinder_pos[:2]) >= OBJ_DIST_MIN:
                 break
-            cylinder_pos = self._sample_near_goal(self._goal_cylinder)
+            cylinder_pos = self._sample_obj_pos()
 
         self.sim.set_cube_pose(pos=cube_pos)
         self.sim.set_cylinder_pose(pos=cylinder_pos)
