@@ -27,8 +27,8 @@ GOAL_CYLINDER_POS = np.array([0.20, 0.06, 0.0])
 
 # Tirage en anneau autour du robot
 OBJ_Z = 0.0135
-OBJ_DIST_MIN = 0.10   # pas trop pres de la base (m)
-OBJ_DIST_MAX = 0.20   # portee max du robot (m)
+OBJ_DIST_MIN = 0.12   # pas trop pres de la base (m)
+OBJ_DIST_MAX = 0.23   # portee max du robot (m)
 
 # Seuil de succes : objet a moins de cette distance de sa cible (m)
 SUCCESS_THRESHOLD = 0.05
@@ -111,10 +111,21 @@ class SortingEnv(gym.Env):
     # -- Helpers --
 
     def _sample_obj_pos(self) -> np.ndarray:
-        """Position aleatoire en anneau autour du robot."""
+        """Position aleatoire en anneau autour du robot avec validation."""
+        for _ in range(100):
+            angle = self.np_random.uniform(-np.pi, np.pi)
+            dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
+            pos = np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
+            
+            # Verifier que l'objet est bien a la distance minimum du robot
+            dist_from_base = float(np.linalg.norm(pos[:2]))
+            if dist_from_base >= OBJ_DIST_MIN:
+                return pos
+        
+        # Fallback : position garantie valide
         angle = self.np_random.uniform(-np.pi, np.pi)
-        dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
-        return np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
+        pos = np.array([OBJ_DIST_MIN * np.cos(angle), OBJ_DIST_MIN * np.sin(angle), OBJ_Z])
+        return pos
 
     def _choose_target(self) -> str:
         """Choisit quel objet cibler : celui qui n'est PAS encore trie.

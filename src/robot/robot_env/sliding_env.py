@@ -22,9 +22,9 @@ from sim_3dofs import Sim3Dofs
 SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_push.xml")
 
 # Tirage en anneau autour du robot
-CUBE_Z = 0.0135
-CUBE_DIST_MIN = 0.08   # pas trop pres de la base (m)
-CUBE_DIST_MAX = 0.20   # portee max du robot (m)
+OBJ_Z = 0.0135
+OBJ_DIST_MIN = 0.12   # pas trop pres de la base (m)
+OBJ_DIST_MAX = 0.23   # portee max du robot (m) 
 
 # Succes : cube deplace d'au moins cette distance depuis sa position initiale (m)
 SUCCESS_DIST = 0.05
@@ -102,11 +102,23 @@ class SlidingEnv(gym.Env):
 
     # -- Helpers --
 
-    def _sample_cube_pos(self) -> np.ndarray:
-        """Position aleatoire en anneau autour du robot."""
+    def _sample_obj_pos(self) -> np.ndarray:
+        """Position aleatoire en anneau autour du robot avec validation."""
+        for _ in range(100):
+            angle = self.np_random.uniform(-np.pi, np.pi)
+            dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
+            pos = np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
+            
+            # Verifier que l'objet est bien a la distance minimum du robot
+            dist_from_base = float(np.linalg.norm(pos[:2]))
+            if dist_from_base >= OBJ_DIST_MIN:
+                return pos
+        
+        # Fallback : position garantie valide
         angle = self.np_random.uniform(-np.pi, np.pi)
-        dist = self.np_random.uniform(CUBE_DIST_MIN, CUBE_DIST_MAX)
-        return np.array([dist * np.cos(angle), dist * np.sin(angle), CUBE_Z])
+        pos = np.array([OBJ_DIST_MIN * np.cos(angle), OBJ_DIST_MIN * np.sin(angle), OBJ_Z])
+        return pos
+
 
     def _get_obs(self) -> np.ndarray:
         """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
@@ -168,7 +180,7 @@ class SlidingEnv(gym.Env):
         super().reset(seed=seed)
         self.sim.reset()
 
-        self._cube_init = self._sample_cube_pos()
+        self._cube_init = self._sample_obj_pos()
         self.sim.set_cube_pose(pos=self._cube_init.copy())
         self.sim.forward()
 
