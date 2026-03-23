@@ -56,7 +56,7 @@ def make_eval_env(algo: str, render: bool):
     render_mode = "human" if render else None
     if algo == "her":
         # Le checkpoint HER a été entraîné sur un GoalEnv (obs dict), pas sur PushEnv.
-        from her import PushInHoleGoalEnv
+        from robot.her_push_in_hole import PushInHoleGoalEnv
         return PushInHoleGoalEnv(render_mode=render_mode)
     return PushEnv(render_mode=render_mode)
 
