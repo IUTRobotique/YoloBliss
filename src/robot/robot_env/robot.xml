@@ -2,7 +2,7 @@
 <!-- Generated using onshape-to-robot -->
 <!-- Onshape https://cad.onshape.com/documents/9cd2d37f10a20c963aa8c3b1/w/751e7ec4f0185e2cc133f396/e/9a387e7c90ee018179d50e3b -->
 <mujoco model="3dofs_model">
-  <compiler angle="radian" meshdir="assets" autolimits="true"/>
+  <compiler angle="radian" meshdir="." autolimits="true"/>
   <default>
     <default class="3dofs_model">
       <position kp="0.0834356288486003" forcerange="-0.413195026823429 0.413195026823429"/>
@@ -77,7 +77,7 @@
     <material name="end_effector_2_visual_material" rgba="0.615686 0.811765 0.929412 1"/>
   </asset>
   <actuator>
-    <position class="3dofs_model" name="1" joint="1" ctrlrange="-2.6179938779914944 2.6179938779914944"/>
+    <position class="3Sdofs_model" name="1" joint="1" ctrlrange="-2.6179938779914944 2.6179938779914944"/>
     <position class="3dofs_model" name="2" joint="2" ctrlrange="-2.6179938779914944 2.6179938779914944"/>
     <position class="3dofs_model" name="3" joint="3" ctrlrange="-2.6179938779914944 2.6179938779914944"/>
   </actuator>
