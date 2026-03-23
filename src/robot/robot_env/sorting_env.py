@@ -27,7 +27,7 @@ OBJ_Y_RANGE = (-0.10, 0.10)
 OBJ_Z = 0.0135  # demi-cote, pose sur le sol
 
 # Distance minimale par rapport a la base du robot (m)
-MIN_BASE_DIST = 0.08
+MIN_BASE_DIST = 0.15
 
 # Distance min entre les deux objets au spawn (m)
 MIN_OBJ_DIST = 0.04
