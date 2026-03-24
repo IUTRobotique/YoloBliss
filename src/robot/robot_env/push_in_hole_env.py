@@ -1,9 +1,3 @@
-"""Environnement Gymnasium pour la tache de Push-in-Hole avec le robot 3-DDL.
-
-L'effecteur final doit pousser un cube pour le faire tomber dans un trou
-situe au niveau du sol.
-"""
-
 from __future__ import annotations
 
 import os
@@ -54,23 +48,7 @@ APPROACH_SATURATION_DIST = 0.03
 
 
 class PushInHoleEnv(gym.Env):
-    """Env Gymnasium : pousser le cube dans le trou.
-
-    Observation (dim 12) :
-        - qpos                (3)  positions articulaires
-        - ee_pos              (3)  position cartesienne de l'effecteur
-        - cube_pos            (3)  position du cube
-        - cube_to_hole        (3)  vecteur cube -> trou
-
-    Action (dim 3) :
-        - positions articulaires cibles (envoyees aux actionneurs MuJoCo)
-
-    Reward (staged) :
-        Phase 1 : -distance(ee, cube)       (approach the cube)
-        Phase 2 : once close to cube, -distance(cube, hole) in xy
-        + bonus si le cube tombe dans le trou
-        - penalite de lissage (action_rate)
-    """
+    """Env Gymnasium : pousser le cube dans le trou."""
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 25}
 

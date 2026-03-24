@@ -34,25 +34,14 @@ GRACE_STEPS = 5
 # Coefficient de penalite pour le lissage des actions
 ACTION_RATE_COEFF = 0.01
 
+# Curriculum : spawn le cube progressivement plus loin du robot
+CURRICULUM_DIST_MAX_START = OBJ_DIST_MIN + 0.02  # au debut, cube presque a dist min
+CURRICULUM_DIST_MAX_END = OBJ_DIST_MAX            # a la fin, tout l'anneau
+CURRICULUM_EPISODES = 2000
+
 
 class SlidingEnv(gym.Env):
-    """Env Gymnasium : cogner le cube pour le faire glisser.
-
-    Observation (dim 9) :
-        - qpos              (3)  positions articulaires
-        - ee_pos            (3)  position cartesienne de l'effecteur
-        - cube_pos          (3)  position du cube
-
-    Action (dim 3) :
-        - positions articulaires cibles (envoyees aux actionneurs MuJoCo)
-
-    Reward :
-        Avant contact : -dist(ee, cube)            approcher le cube
-        Pendant frappe (5 steps) : +3.0 * displacement   frapper fort
-        Apres grace : +3.0 * displacement, -5.0 si colle  degager
-        Succes : +30 si displacement > SUCCESS_DIST
-        Lissage : -0.01 * ||a_t - a_{t-1}||^2
-    """
+    """Env Gymnasium : cogner le cube pour le faire glisser."""
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 25}
 
@@ -89,21 +78,30 @@ class SlidingEnv(gym.Env):
         self._prev_action: np.ndarray = np.zeros(n_act)
         self._step_count: int = 0
         self._contact_step: int = -1  # step ou le premier contact a eu lieu
+        self._episode_count: int = 0
 
     # -- Helpers --
 
+    def _current_max_obj_dist(self) -> float:
+        """Distance max de spawn selon la progression du curriculum."""
+        progress = min(1.0, self._episode_count / float(CURRICULUM_EPISODES))
+        return float(
+            CURRICULUM_DIST_MAX_START
+            + progress * (CURRICULUM_DIST_MAX_END - CURRICULUM_DIST_MAX_START)
+        )
+
     def _sample_obj_pos(self) -> np.ndarray:
-        """Position aleatoire en anneau autour du robot avec validation."""
+        """Position aleatoire en anneau autour du robot avec curriculum."""
+        max_dist = self._current_max_obj_dist()
         for _ in range(100):
             angle = self.np_random.uniform(-np.pi, np.pi)
-            dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
+            dist = self.np_random.uniform(OBJ_DIST_MIN, max_dist)
             pos = np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
-            
-            # Verifier que l'objet est bien a la distance minimum du robot
+
             dist_from_base = float(np.linalg.norm(pos[:2]))
             if dist_from_base >= OBJ_DIST_MIN:
                 return pos
-        
+
         # Fallback : position garantie valide
         angle = self.np_random.uniform(-np.pi, np.pi)
         pos = np.array([OBJ_DIST_MIN * np.cos(angle), OBJ_DIST_MIN * np.sin(angle), OBJ_Z])
@@ -169,15 +167,21 @@ class SlidingEnv(gym.Env):
         super().reset(seed=seed)
         self.sim.reset()
 
-        self._cube_init = self._sample_obj_pos()
+        # Curriculum : bootstrap avec position facilitee
+        if self._episode_count < 50:
+            self._cube_init = np.array([OBJ_DIST_MIN, 0.0, OBJ_Z])
+        else:
+            self._cube_init = self._sample_obj_pos()
+
         self.sim.set_cube_pose(pos=self._cube_init.copy())
         self.sim.forward()
 
         self._prev_action = np.zeros(self.sim.n_actuators)
         self._step_count = 0
         self._contact_step = -1
+        self._episode_count += 1
 
-        info = {"cube_init": self._cube_init.copy()}
+        info = {"cube_init": self._cube_init.copy(), "episode_num": self._episode_count}
         return self._get_obs(), info
 
     def step(self, action: np.ndarray):

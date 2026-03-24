@@ -1,9 +1,3 @@
-"""Environnement Gymnasium pour la tâche de Reaching avec le robot 3-DDL.
-
-L'effecteur final doit atteindre une position cible 3D tirée aléatoirement
-dans l'espace de travail du robot.
-"""
-
 from __future__ import annotations
 
 import os

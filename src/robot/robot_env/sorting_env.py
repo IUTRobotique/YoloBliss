@@ -20,8 +20,8 @@ OBJ_Z = 0.0135
 OBJ_DIST_MIN = 0.12   # pas trop pres de la base (m)
 OBJ_DIST_MAX = 0.20   # portee max du robot (m)
 
-# Seuil de succes : objet a moins de cette distance de sa cible (m)
-SUCCESS_THRESHOLD = 0.05
+# Seuil de succes : centre de l'objet dans le disque de goal (rayon 0.03m)
+SUCCESS_THRESHOLD = 0.025
 
 # Duree max d'un episode
 MAX_EPISODE_STEPS = 400
@@ -31,6 +31,11 @@ ACTION_RATE_COEFF = 0.01
 
 # Penalite temporelle par step (idem push_in_hole)
 STEP_TIME_PENALTY = 0.05
+
+# Curriculum : distance min objet-goal augmente progressivement
+CURRICULUM_MIN_DIST_START = 0.03   # au debut, objets peuvent spawner assez pres des goals (facile)
+CURRICULUM_MIN_DIST_END = 0.10     # a la fin, doivent etre loin des goals (difficile)
+CURRICULUM_EPISODES = 2000
 
 
 class SortingEnv(gym.Env):
@@ -73,26 +78,35 @@ class SortingEnv(gym.Env):
         # Etat interne
         self._prev_action: np.ndarray = np.zeros(n_act)
         self._step_count: int = 0
+        self._episode_count: int = 0
         # Cible verrouillee : "cube" ou "cylinder"
         self._current_target: str = "cube"
 
     # -- Helpers --
 
+    def _current_min_goal_dist(self) -> float:
+        """Distance min objet-goal selon la progression du curriculum."""
+        progress = min(1.0, self._episode_count / float(CURRICULUM_EPISODES))
+        return float(
+            CURRICULUM_MIN_DIST_START
+            + progress * (CURRICULUM_MIN_DIST_END - CURRICULUM_MIN_DIST_START)
+        )
+
     def _sample_obj_pos(self) -> np.ndarray:
-        """Position aleatoire en anneau, loin des zones de goal."""
-        min_dist_to_goal = 0.08  # Distance minimale à maintenir
+        """Position aleatoire en anneau, loin des zones de goal (curriculum)."""
+        min_dist_to_goal = self._current_min_goal_dist()
         for _ in range(100):
             angle = self.np_random.uniform(-np.pi, np.pi)
             dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
             pos = np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
-            
-            # Verifier qu'on ne spawn pas sur une zone de goal
+
+            # Verifier qu'on ne spawn pas trop pres d'une zone de goal
             dist_to_cube_goal = np.linalg.norm(pos[:2] - self._goal_cube[:2])
             dist_to_cyl_goal = np.linalg.norm(pos[:2] - self._goal_cylinder[:2])
-            
+
             if dist_to_cube_goal > min_dist_to_goal and dist_to_cyl_goal > min_dist_to_goal:
                 return pos
-        
+
         # Fallback
         return np.array([OBJ_DIST_MIN * np.cos(0), OBJ_DIST_MIN * np.sin(0), OBJ_Z])
 
@@ -198,13 +212,23 @@ class SortingEnv(gym.Env):
         super().reset(seed=seed)
         self.sim.reset()
 
-        cube_pos = self._sample_obj_pos()
-        cylinder_pos = self._sample_obj_pos()
-        # Verifier que les objets ne se chevauchent pas
-        for _ in range(50):
-            if np.linalg.norm(cube_pos[:2] - cylinder_pos[:2]) >= OBJ_DIST_MIN:
-                break
+        # Curriculum : bootstrap avec positions facilitees proches des goals
+        if self._episode_count < 50:
+            # Cube proche de son goal, cylindre proche du sien
+            cube_pos = self._goal_cube.copy()
+            cube_pos[:2] += np.array([-0.06, 0.0])
+            cube_pos[2] = OBJ_Z
+            cylinder_pos = self._goal_cylinder.copy()
+            cylinder_pos[:2] += np.array([-0.06, 0.0])
+            cylinder_pos[2] = OBJ_Z
+        else:
+            cube_pos = self._sample_obj_pos()
             cylinder_pos = self._sample_obj_pos()
+            # Verifier que les objets ne se chevauchent pas
+            for _ in range(50):
+                if np.linalg.norm(cube_pos[:2] - cylinder_pos[:2]) >= OBJ_DIST_MIN:
+                    break
+                cylinder_pos = self._sample_obj_pos()
 
         self.sim.set_cube_pose(pos=cube_pos)
         self.sim.set_cylinder_pose(pos=cylinder_pos)
@@ -216,6 +240,7 @@ class SortingEnv(gym.Env):
 
         self._prev_action = np.zeros(self.sim.n_actuators)
         self._step_count = 0
+        self._episode_count += 1
         # Commencer par le cube (arbitraire)
         self._current_target = "cube"
 
