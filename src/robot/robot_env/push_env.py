@@ -78,7 +78,7 @@ class PushEnv(gym.Env):
         """Build the observation vector with sim-to-real noise."""
         qpos = self.sim.get_qpos() + self.np_random.normal(0, 0.005, size=(3,))
         ee_pos = self.sim.get_end_effector_pos()
-        cube_pos = self.sim.get_cube_pos() + self.np_random.normal(0, 0.002, size=(3,))
+        cube_pos = self.sim.get_cube_pos() + self.np_random.normal(0, 0.005, size=(3,))
         return np.concatenate([
             qpos, ee_pos, cube_pos,
         ]).astype(np.float32)
@@ -111,8 +111,9 @@ class PushEnv(gym.Env):
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
 
-        # Reset simulation (neutral pose)
-        self.sim.reset()
+        # Reset simulation avec pose initiale aleatoire (sim-to-real)
+        qpos_init = self.np_random.uniform(-0.1, 0.1, size=(3,))
+        self.sim.reset(qpos=qpos_init)
 
         # Sample cube on the ground
         self._cube_init = self._sample_obj_pos()

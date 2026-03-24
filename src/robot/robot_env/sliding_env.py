@@ -90,7 +90,7 @@ class SlidingEnv(gym.Env):
         cube_pos = self.sim.get_cube_pos()
 
         qpos = qpos + self.np_random.normal(0, 0.005, size=qpos.shape)
-        cube_pos = cube_pos + self.np_random.normal(0, 0.002, size=cube_pos.shape)
+        cube_pos = cube_pos + self.np_random.normal(0, 0.005, size=cube_pos.shape)
 
         return np.concatenate([
             qpos, ee_pos, cube_pos,
@@ -141,7 +141,9 @@ class SlidingEnv(gym.Env):
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
-        self.sim.reset()
+        # Pose initiale aleatoire (sim-to-real)
+        qpos_init = self.np_random.uniform(-0.1, 0.1, size=(3,))
+        self.sim.reset(qpos=qpos_init)
 
         # Curriculum : bootstrap avec position facilitee
         if self._episode_count < 50:

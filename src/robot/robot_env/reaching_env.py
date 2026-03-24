@@ -11,10 +11,10 @@ from sim_3dofs import Sim3Dofs
 # Scène MuJoCo dédiée au reaching (robot + goal marker, pas de cube)
 SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_reaching.xml")
 
-OBJ_DIST_MIN = 0.12   # pas trop pres de la base (m)
-OBJ_DIST_MAX = 0.20   # portee max du robot (m)
+OBJ_DIST_MIN = 0.10   # pas trop pres de la base (m)
+OBJ_DIST_MAX = 0.22   # portee max du robot (m)
 OBJ_Z_MIN = 0.0       # sol
-OBJ_Z_MAX = 0.05      # hauteur max atteignable (m)
+OBJ_Z_MAX = 0.20      # hauteur max atteignable (m)
 
 # Seuil de succès (m)
 SUCCESS_THRESHOLD = 0.02  # 2 cm
@@ -105,8 +105,9 @@ class ReachingEnv(gym.Env):
         # Nouveau goal
         self._goal = self._sample_goal_pos()
 
-        # Reset simulation (pose neutre)
-        self.sim.reset()
+        # Reset simulation avec pose initiale aleatoire (sim-to-real)
+        qpos_init = self.np_random.uniform(-0.1, 0.1, size=(3,))
+        self.sim.reset(qpos=qpos_init)
 
         # Afficher le goal marker dans MuJoCo
         self.sim.set_goal_marker(self._goal)

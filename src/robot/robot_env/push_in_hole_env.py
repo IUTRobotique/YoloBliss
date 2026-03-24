@@ -121,7 +121,7 @@ class PushInHoleEnv(gym.Env):
 
         # Simule l'imprecision des moteurs et de la camera.
         qpos += self.np_random.normal(0, 0.005, size=qpos.shape)
-        cube_pos += self.np_random.normal(0, 0.002, size=cube_pos.shape)
+        cube_pos += self.np_random.normal(0, 0.005, size=cube_pos.shape)
 
         cube_to_hole = self._hole_pos - cube_pos
         return np.concatenate([
@@ -166,7 +166,9 @@ class PushInHoleEnv(gym.Env):
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
-        self.sim.reset()
+        # Pose initiale aleatoire (sim-to-real)
+        qpos_init = self.np_random.uniform(-0.1, 0.1, size=(3,))
+        self.sim.reset(qpos=qpos_init)
 
         # Curriculum : au début, spawn le cube plus près de l'effecteur
         # pour accélérer le bootstrap initial

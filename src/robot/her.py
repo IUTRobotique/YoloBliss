@@ -18,7 +18,7 @@ from stable_baselines3.common.env_util import make_vec_env
 from robot_env.push_env import PushEnv
 from robot_env.reaching_env import ReachingEnv
 
-TOTAL_TIMESTEPS: int = 100_000_00
+TOTAL_TIMESTEPS: int = 100_000_0
 BUFFER_SIZE: int = 1_000_000
 LEARNING_STARTS: int = 1_000
 BATCH_SIZE: int = 256

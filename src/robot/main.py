@@ -95,15 +95,14 @@ def make_eval_env(env_name: str, algo: str, render: bool):
     env_cls = ENVS[env_name]
 
     if algo == "her":
-        # HER necessite le wrapper GoalEnv
+        # HER avec wrapper GoalEnv pour les envs qui le necessitent
         if env_name == "push_in_hole":
             from her_push_in_hole import PushInHoleGoalEnv
             return PushInHoleGoalEnv(render_mode=render_mode)
         elif env_name == "sorting":
             from her_sorting import SortingGoalEnv
             return SortingGoalEnv(render_mode=render_mode)
-        else:
-            raise ValueError(f"HER non supporte pour l'env '{env_name}' (pas de goal)")
+        # reaching et push : SAC standard (entraines via her.py, pas de GoalEnv)
 
     return env_cls(render_mode=render_mode)
 

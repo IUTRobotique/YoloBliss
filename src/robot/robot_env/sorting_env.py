@@ -89,8 +89,8 @@ class SortingEnv(gym.Env):
         """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
         qpos = self.sim.get_qpos() + self.np_random.normal(0, 0.005, size=(3,))
         ee_pos = self.sim.get_end_effector_pos()
-        cube_pos = self.sim.get_cube_pos() + self.np_random.normal(0, 0.002, size=(3,))
-        cyl_pos = self.sim.get_cylinder_pos() + self.np_random.normal(0, 0.002, size=(3,))
+        cube_pos = self.sim.get_cube_pos() + self.np_random.normal(0, 0.005, size=(3,))
+        cyl_pos = self.sim.get_cylinder_pos() + self.np_random.normal(0, 0.005, size=(3,))
         
         return np.concatenate([
             qpos, ee_pos, cube_pos, cyl_pos,
@@ -143,7 +143,9 @@ class SortingEnv(gym.Env):
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
-        self.sim.reset()
+        # Pose initiale aleatoire (sim-to-real)
+        qpos_init = self.np_random.uniform(-0.1, 0.1, size=(3,))
+        self.sim.reset(qpos=qpos_init)
 
         # Curriculum : bootstrap avec positions facilitees proches des goals
         if self._episode_count < 50:
