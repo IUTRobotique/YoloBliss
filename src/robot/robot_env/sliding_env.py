@@ -1,13 +1,3 @@
-"""Environnement Gymnasium pour la tache de Sliding avec le robot 3-DDL.
-
-L'effecteur final doit cogner le cube pour lui donner une impulsion.
-Le cube doit ensuite glisser par inertie loin de sa position initiale.
-
-Comme PushEnv, pas de goal : on recompense le deplacement du cube.
-Difference avec push : apres le contact, on recompense l'effecteur
-qui s'eloigne du cube, forcant l'agent a frapper puis reculer.
-"""
-
 from __future__ import annotations
 
 import os
@@ -24,7 +14,7 @@ SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_push.xml")
 # Tirage en anneau autour du robot
 OBJ_Z = 0.0135
 OBJ_DIST_MIN = 0.12   # pas trop pres de la base (m)
-OBJ_DIST_MAX = 0.23   # portee max du robot (m) 
+OBJ_DIST_MAX = 0.20   # portee max du robot (m) 
 
 # Succes : cube deplace d'au moins cette distance depuis sa position initiale (m)
 SUCCESS_DIST = 0.05
@@ -118,7 +108,6 @@ class SlidingEnv(gym.Env):
         angle = self.np_random.uniform(-np.pi, np.pi)
         pos = np.array([OBJ_DIST_MIN * np.cos(angle), OBJ_DIST_MIN * np.sin(angle), OBJ_Z])
         return pos
-
 
     def _get_obs(self) -> np.ndarray:
         """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
