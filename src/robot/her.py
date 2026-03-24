@@ -21,7 +21,7 @@ from stable_baselines3.common.env_util import make_vec_env
 from robot_env.push_env import PushEnv
 from robot_env.sliding_env import SlidingEnv
 
-TOTAL_TIMESTEPS: int = 300_000
+TOTAL_TIMESTEPS: int = 1_000_000
 BUFFER_SIZE: int = 1_000_000
 LEARNING_STARTS: int = 1_000
 BATCH_SIZE: int = 256
