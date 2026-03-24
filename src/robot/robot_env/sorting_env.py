@@ -32,11 +32,6 @@ ACTION_RATE_COEFF = 0.01
 # Penalite temporelle par step (idem push_in_hole)
 STEP_TIME_PENALTY = 0.05
 
-# Curriculum : distance min objet-goal augmente progressivement
-CURRICULUM_MIN_DIST_START = 0.03   # au debut, objets peuvent spawner assez pres des goals (facile)
-CURRICULUM_MIN_DIST_END = 0.10     # a la fin, doivent etre loin des goals (difficile)
-CURRICULUM_EPISODES = 2000
-
 
 class SortingEnv(gym.Env):
     """Env Gymnasium : trier deux objets en les poussant vers leurs zones cibles."""
@@ -84,31 +79,11 @@ class SortingEnv(gym.Env):
 
     # -- Helpers --
 
-    def _current_min_goal_dist(self) -> float:
-        """Distance min objet-goal selon la progression du curriculum."""
-        progress = min(1.0, self._episode_count / float(CURRICULUM_EPISODES))
-        return float(
-            CURRICULUM_MIN_DIST_START
-            + progress * (CURRICULUM_MIN_DIST_END - CURRICULUM_MIN_DIST_START)
-        )
-
     def _sample_obj_pos(self) -> np.ndarray:
-        """Position aleatoire en anneau, loin des zones de goal (curriculum)."""
-        min_dist_to_goal = self._current_min_goal_dist()
-        for _ in range(100):
-            angle = self.np_random.uniform(-np.pi, np.pi)
-            dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
-            pos = np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
-
-            # Verifier qu'on ne spawn pas trop pres d'une zone de goal
-            dist_to_cube_goal = np.linalg.norm(pos[:2] - self._goal_cube[:2])
-            dist_to_cyl_goal = np.linalg.norm(pos[:2] - self._goal_cylinder[:2])
-
-            if dist_to_cube_goal > min_dist_to_goal and dist_to_cyl_goal > min_dist_to_goal:
-                return pos
-
-        # Fallback
-        return np.array([OBJ_DIST_MIN * np.cos(0), OBJ_DIST_MIN * np.sin(0), OBJ_Z])
+        """Position aleatoire en anneau autour du robot."""
+        angle = self.np_random.uniform(-np.pi, np.pi)
+        dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
+        return np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
 
     def _get_obs(self) -> np.ndarray:
         """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""

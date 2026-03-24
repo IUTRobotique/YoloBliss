@@ -34,11 +34,6 @@ GRACE_STEPS = 5
 # Coefficient de penalite pour le lissage des actions
 ACTION_RATE_COEFF = 0.01
 
-# Curriculum : spawn le cube progressivement plus loin du robot
-CURRICULUM_DIST_MAX_START = OBJ_DIST_MIN + 0.02  # au debut, cube presque a dist min
-CURRICULUM_DIST_MAX_END = OBJ_DIST_MAX            # a la fin, tout l'anneau
-CURRICULUM_EPISODES = 2000
-
 
 class SlidingEnv(gym.Env):
     """Env Gymnasium : cogner le cube pour le faire glisser."""
@@ -82,30 +77,11 @@ class SlidingEnv(gym.Env):
 
     # -- Helpers --
 
-    def _current_max_obj_dist(self) -> float:
-        """Distance max de spawn selon la progression du curriculum."""
-        progress = min(1.0, self._episode_count / float(CURRICULUM_EPISODES))
-        return float(
-            CURRICULUM_DIST_MAX_START
-            + progress * (CURRICULUM_DIST_MAX_END - CURRICULUM_DIST_MAX_START)
-        )
-
     def _sample_obj_pos(self) -> np.ndarray:
-        """Position aleatoire en anneau autour du robot avec curriculum."""
-        max_dist = self._current_max_obj_dist()
-        for _ in range(100):
-            angle = self.np_random.uniform(-np.pi, np.pi)
-            dist = self.np_random.uniform(OBJ_DIST_MIN, max_dist)
-            pos = np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
-
-            dist_from_base = float(np.linalg.norm(pos[:2]))
-            if dist_from_base >= OBJ_DIST_MIN:
-                return pos
-
-        # Fallback : position garantie valide
+        """Position aleatoire en anneau autour du robot."""
         angle = self.np_random.uniform(-np.pi, np.pi)
-        pos = np.array([OBJ_DIST_MIN * np.cos(angle), OBJ_DIST_MIN * np.sin(angle), OBJ_Z])
-        return pos
+        dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
+        return np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
 
     def _get_obs(self) -> np.ndarray:
         """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
