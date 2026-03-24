@@ -127,6 +127,8 @@ if __name__ == "__main__":
                         help="Pause en secondes entre chaque step")
     parser.add_argument("--render", action="store_true",
                         help="Affiche MuJoCo en temps reel")
+    parser.add_argument("--real", action="store_true",
+                        help="Active le sim-to-real (robot physique)")
     args = parser.parse_args()
 
     env = make_eval_env(args.env, args.algo, args.render)
@@ -136,7 +138,9 @@ if __name__ == "__main__":
 
     rewards, successes, distances = [], [], []
 
-    sim_to_real.init_real_robot()
+    if args.real:
+        sim_to_real.init_real_robot()
+
     for ep in range(args.episodes):
         obs, _ = env.reset()
         done = False
@@ -145,10 +149,11 @@ if __name__ == "__main__":
         while not done:
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
-            motor_joints = env._inner.sim.get_qpos()
-            sim_to_real.update_real_robot_position(motor_joints)
 
-            obs, reward, terminated, truncated, info = env.step(action)
+            if args.real:
+                motor_joints = env._inner.sim.get_qpos()
+                sim_to_real.update_real_robot_position(motor_joints)
+
             env.render()
             total_reward += reward
             done = terminated or truncated
@@ -163,7 +168,8 @@ if __name__ == "__main__":
         print(f"Ep {ep+1:3d}: reward={total_reward:7.2f}  "
               f"success={info.get('is_success', False)}  dist={dist_value:.4f}")
 
-    sim_to_real.close_real_robot()
+    if args.real:
+        sim_to_real.close_real_robot()
     env.close()
 
     print(f"\n--- {args.env} | {args.algo} | {args.episodes} episodes ---")
