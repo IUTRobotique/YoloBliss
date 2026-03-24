@@ -110,16 +110,6 @@ class SortingEnv(gym.Env):
         # Fallback
         return np.array([OBJ_DIST_MIN * np.cos(0), OBJ_DIST_MIN * np.sin(0), OBJ_Z])
 
-    def _get_target_obj_pos(self) -> np.ndarray:
-        if self._current_target == "cube":
-            return self.sim.get_cube_pos()
-        return self.sim.get_cylinder_pos()
-
-    def _get_target_goal_pos(self) -> np.ndarray:
-        if self._current_target == "cube":
-            return self._goal_cube
-        return self._goal_cylinder
-
     def _get_obs(self) -> np.ndarray:
         """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
         qpos = self.sim.get_qpos() + self.np_random.normal(0, 0.005, size=(3,))
@@ -175,38 +165,6 @@ class SortingEnv(gym.Env):
         reward -= ACTION_RATE_COEFF * action_rate
 
         return reward, cube_sorted, cyl_sorted, both_sorted
-
-    # -- Protocole HER --
-
-    def get_achieved_goal(self) -> np.ndarray:
-        cube_pos = self.sim.get_cube_pos()
-        cylinder_pos = self.sim.get_cylinder_pos()
-        return np.concatenate([cube_pos, cylinder_pos]).astype(np.float32)
-
-    def get_desired_goal(self) -> np.ndarray:
-        return np.concatenate([
-            self._goal_cube, self._goal_cylinder,
-        ]).astype(np.float32)
-
-    @property
-    def goal_dim(self) -> int:
-        return 6
-
-    @staticmethod
-    def compute_goal_reward(
-        achieved_goal: np.ndarray, desired_goal: np.ndarray
-    ) -> np.ndarray:
-        dist_cube = np.linalg.norm(
-            achieved_goal[..., :2] - desired_goal[..., :2], axis=-1
-        ).astype(np.float32)
-        dist_cyl = np.linalg.norm(
-            achieved_goal[..., 3:5] - desired_goal[..., 3:5], axis=-1
-        ).astype(np.float32)
-        reward = -dist_cube - dist_cyl
-        cube_sorted = (dist_cube < SUCCESS_THRESHOLD).astype(np.float32)
-        cyl_sorted = (dist_cyl < SUCCESS_THRESHOLD).astype(np.float32)
-        reward += 100.0 * cube_sorted + 100.0 * cyl_sorted
-        return reward
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)

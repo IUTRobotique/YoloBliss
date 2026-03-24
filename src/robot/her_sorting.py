@@ -32,9 +32,8 @@ TAU: float = 0.005
 LEARNING_RATE: float = 3e-4
 GRADIENT_STEPS: int = 100
 
-SUCCESS_RATE_TARGET: float = 0.90
-MIN_EVAL_EPISODES_FOR_SUCCESS: int = 10
-EVAL_FREQ_FOR_SUCCESS_CHECK: int = 5_000
+EVAL_FREQ: int = 5_000
+N_EVAL_EPISODES: int = 10
 
 DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -54,40 +53,6 @@ class _RenderCallback(BaseCallback):
         self.training_env.render("human")
         return True
 
-
-class _SuccessStoppingCallback(BaseCallback):
-    def __init__(self, success_rate_target: float = 0.90, verbose: int = 0):
-        super().__init__()
-        self.success_rate_target = success_rate_target
-        self.verbose = verbose
-        self.best_success_rate = 0.0
-        self.last_check_timestep = 0
-
-    def _on_step(self) -> bool:
-        current_timesteps = self.model.num_timesteps
-        if current_timesteps - self.last_check_timestep < EVAL_FREQ_FOR_SUCCESS_CHECK:
-            return True
-        self.last_check_timestep = current_timesteps
-        if current_timesteps > LEARNING_STARTS and len(self.model.ep_info_buffer) > 0:
-            recent_episodes = list(self.model.ep_info_buffer)
-            if len(recent_episodes) >= MIN_EVAL_EPISODES_FOR_SUCCESS:
-                sample_size = min(MIN_EVAL_EPISODES_FOR_SUCCESS * 2, len(recent_episodes))
-                recent_episodes = recent_episodes[-sample_size:]
-                successes = sum(
-                    1 for ep in recent_episodes
-                    if "is_success" in ep and ep["is_success"]
-                )
-                success_rate = successes / len(recent_episodes)
-                if success_rate > self.best_success_rate:
-                    self.best_success_rate = success_rate
-                    if self.verbose > 0:
-                        print(f"\nTimestep {current_timesteps:,} | Success: {success_rate:.1%} | Best: {self.best_success_rate:.1%}")
-                if success_rate >= self.success_rate_target:
-                    if self.verbose > 0:
-                        print(f"\nOBJECTIF ATTEINT! Success rate: {success_rate:.1%}")
-                        print(f"   Entrainement arrete apres {current_timesteps:,} timesteps")
-                    return False
-        return True
 
 
 class SortingGoalEnv(gym.Env):
@@ -250,7 +215,6 @@ def train(
     print("ENTRAINEMENT SAC+HER - Sorting")
     print("="*70)
     print(f"Limite timesteps: {total_timesteps:,}")
-    print(f"Objectif succes: {SUCCESS_RATE_TARGET:.0%}")
     print("="*70 + "\n")
 
     render_mode = "human" if render else None
@@ -263,15 +227,12 @@ def train(
         eval_env,
         best_model_save_path=model_dir,
         log_path=log_dir,
-        eval_freq=EVAL_FREQ_FOR_SUCCESS_CHECK,
-        n_eval_episodes=MIN_EVAL_EPISODES_FOR_SUCCESS,
+        eval_freq=EVAL_FREQ,
+        n_eval_episodes=N_EVAL_EPISODES,
         deterministic=True,
     )
-    success_callback = _SuccessStoppingCallback(
-        success_rate_target=SUCCESS_RATE_TARGET, verbose=1,
-    )
 
-    callbacks: list[BaseCallback] = [eval_callback, success_callback]
+    callbacks: list[BaseCallback] = [eval_callback]
     if render:
         callbacks.append(_RenderCallback())
 
