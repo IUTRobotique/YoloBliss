@@ -19,7 +19,7 @@ SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_reaching.xml")
 
 OBJ_Z = 0.0135
 OBJ_DIST_MIN = 0.12   # pas trop pres de la base (m)
-OBJ_DIST_MAX = 0.23   # portee max du robot (m)
+OBJ_DIST_MAX = 0.20   # portee max du robot (m)
 
 # Seuil de succès (m)
 SUCCESS_THRESHOLD = 0.01  # 1 cm
@@ -29,22 +29,8 @@ MAX_EPISODE_STEPS = 100
 
 
 class ReachingEnv(gym.Env):
-    """Env Gymnasium : l'end-effector doit atteindre un goal 3D.
-
-    Observation (dim 9) :
-        - qpos              (3)  positions articulaires
-        - ee_pos            (3)  position cartésienne de l'effecteur
-        - goal_pos - ee_pos (3)  vecteur effecteur → cible
-
-    Action (dim 3) :
-        - positions articulaires cibles (envoyées aux actionneurs MuJoCo)
-
-    Reward :
-        - -distance(ee, goal)  (dense)
-        - + bonus si distance < seuil
-        - pénalité de lissage (action_rate)
-    """
-
+    """Env Gymnasium : Reaching dans une position cible."""
+    
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 25}
 
     def __init__(self, render_mode: str | None = None) -> None:
@@ -86,26 +72,16 @@ class ReachingEnv(gym.Env):
     # Helpers 
 
     def _sample_obj_pos(self) -> np.ndarray:
-        """Position aleatoire en anneau autour du robot avec validation."""
-        for _ in range(100):
-            angle = self.np_random.uniform(-np.pi, np.pi)
-            dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
-            pos = np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
-            
-            # Verifier que l'objet est bien a la distance minimum du robot
-            dist_from_base = float(np.linalg.norm(pos[:2]))
-            if dist_from_base >= OBJ_DIST_MIN:
-                return pos
-        
-        # Fallback : position garantie valide
+        """Position aleatoire en anneau autour du robot."""
         angle = self.np_random.uniform(-np.pi, np.pi)
-        pos = np.array([OBJ_DIST_MIN * np.cos(angle), OBJ_DIST_MIN * np.sin(angle), OBJ_Z])
+        dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
+        pos = np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
+
         return pos
 
-
     def _get_obs(self) -> np.ndarray:
-        """Construit le vecteur d'observation."""
-        qpos = self.sim.get_qpos()
+        """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
+        qpos = self.sim.get_qpos() + self.np_random.normal(0, 0.005, size=(3,))
         ee_pos = self.sim.get_end_effector_pos()
         goal_diff = self._goal - ee_pos
         return np.concatenate([qpos, ee_pos, goal_diff]).astype(np.float32)

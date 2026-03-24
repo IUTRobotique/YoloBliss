@@ -20,10 +20,10 @@ SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_push_in_hole.xml")
 # Position fixe du trou (centre)
 HOLE_POS = np.array([0.15, 0.0, 0.0])
 
-# Bornes pour le tirage aleatoire de la position initiale du cube
-CUBE_X_RANGE = (0.06, 0.20)
-CUBE_Y_RANGE = (-0.10, 0.10)
-CUBE_Z = 0.0135  # demi-cote du cube, pose sur le sol
+# Tirage en anneau autour du robot
+OBJ_Z = 0.0135
+OBJ_DIST_MIN = 0.12   # pas trop pres de la base (m)
+OBJ_DIST_MAX = 0.20   # portee max du robot (m)
 
 # Distance minimale du cube par rapport à la base du robot (m)
 MIN_BASE_DIST = 0.15
@@ -107,7 +107,7 @@ class PushInHoleEnv(gym.Env):
 
         # Etat interne
         self._hole_pos: np.ndarray = HOLE_POS.copy()
-        self._initial_cube_pos: np.ndarray = np.array([0.0, 0.0, CUBE_Z], dtype=float)
+        self._initial_cube_pos: np.ndarray = np.array([0.0, 0.0, OBJ_Z], dtype=float)
         self._prev_action: np.ndarray = np.zeros(n_act)
         self._step_count: int = 0
         self._episode_count: int = 0
@@ -121,21 +121,19 @@ class PushInHoleEnv(gym.Env):
         )
 
     # -- Helpers --
-
-    def _sample_cube_pos(self) -> np.ndarray:
-        """Tire une position initiale pour le cube, assez loin du trou et de la base."""
+    def _sample_obj_pos(self) -> np.ndarray:
+        """Tire une position initiale pour le cube en anneau, assez loin du trou et de la base."""
         min_cube_hole_dist = self._current_min_cube_hole_dist()
         for _ in range(100):
-            pos = np.array([
-                self.np_random.uniform(*CUBE_X_RANGE),
-                self.np_random.uniform(*CUBE_Y_RANGE),
-                CUBE_Z,
-            ])
+            angle = self.np_random.uniform(-np.pi, np.pi)
+            dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
+            pos = np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
+            
             dist_xy = np.linalg.norm(pos[:2] - self._hole_pos[:2])
             if dist_xy > min_cube_hole_dist and np.linalg.norm(pos) >= MIN_BASE_DIST:
                 return pos
         # Fallback : position par defaut loin du trou et de la base
-        return np.array([0.10, 0.08, CUBE_Z])
+        return np.array([OBJ_DIST_MIN * np.cos(0), OBJ_DIST_MIN * np.sin(0), OBJ_Z])
 
     def _get_obs(self) -> np.ndarray:
         """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
@@ -196,7 +194,7 @@ class PushInHoleEnv(gym.Env):
         # pour accélérer le bootstrap initial
         if self._episode_count < 50:
             # Position facilitée : cube proche et stationnaire
-            cube_pos = np.array([0.10, 0.05, CUBE_Z])
+            cube_pos = np.array([0.10, 0.05, OBJ_Z])
         else:
             # Sampling aléatoire standard après bootstrap
             cube_pos = self._sample_cube_pos()
