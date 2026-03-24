@@ -1,11 +1,15 @@
 """Test des modeles entraines sur tous les environnements.
 
 Usage :
-    python main.py --env reaching --algo sac
-    python main.py --env push --algo sac --render
-    python main.py --env sliding --algo sac
+    python main.py --env reaching     --algo sac
+    python main.py --env push         --algo sac --render
+    python main.py --env sliding      --algo sac
     python main.py --env push_in_hole --algo her
-    python main.py --env sorting --algo her
+    python main.py --env sorting      --algo her
+
+    # Mode sim-to-real (caméra RealSense + moteurs Dynamixel) :
+    python main.py --env push_in_hole --algo her --real
+    python main.py --env reaching     --algo sac --real
 """
 
 from __future__ import annotations
@@ -127,12 +131,31 @@ if __name__ == "__main__":
                         help="Pause en secondes entre chaque step")
     parser.add_argument("--render", action="store_true",
                         help="Affiche MuJoCo en temps reel")
+    # ---- Mode sim-to-real ----------------------------------------
+    parser.add_argument("--real", action="store_true",
+                        help="Mode caméra : pilote la simu et les vrais moteurs en temps reél")
+    parser.add_argument("--yolo_model", default="./best.pt",
+                        help="Poids YOLO pour la détection objet (--real uniquement)")
+    parser.add_argument("--offset_x", type=float, default=0.04,
+                        help="Décalage X ArUco→base robot en mètres (défaut: 4 cm)")
+    parser.add_argument("--offset_y", type=float, default=0.0)
+    parser.add_argument("--offset_z", type=float, default=0.0)
     args = parser.parse_args()
 
     env = make_eval_env(args.env, args.algo, args.render)
     model_path = resolve_model_path(args.env, args.algo)
     print(f"Chargement: {model_path}")
     model = ALGO_CLS[args.algo].load(str(model_path), env=env)
+
+    # ---- Mode sim-to-real ----------------------------------------
+    if args.real:
+        import numpy as np
+        from real_perception import RealPerception
+        import sim_from_real
+        base_offset = np.array([args.offset_x, args.offset_y, args.offset_z])
+        perception = RealPerception(yolo_model_path=args.yolo_model, base_offset=base_offset)
+        sim_from_real.run(env, model, args.env, perception)
+        raise SystemExit(0)
 
     rewards, successes, distances = [], [], []
 
@@ -145,11 +168,9 @@ if __name__ == "__main__":
         while not done:
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
-            motor_joints = env._inner.sim.get_qpos()
-            sim_to_real.update_real_robot_position(motor_joints)
-
-            obs, reward, terminated, truncated, info = env.step(action)
-            env.render()
+            
+            if args.render:
+                env.render()
             total_reward += reward
             done = terminated or truncated
             if args.delay > 0:
