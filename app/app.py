@@ -82,8 +82,13 @@ with col_ctrl:
     st.subheader("Configuration")
 
     algo_names = list(ALGO_INFO.keys())
+    algo_labels = [
+        f"{name}  (pas de modele entraine)" if not os.path.exists(model_path(name)) else name
+        for name in algo_names
+    ]
     default_algo_index = algo_names.index(st.session_state.algo) if st.session_state.algo in algo_names else 0
-    algo_choice = st.selectbox("Algorithme", algo_names, index=default_algo_index)
+    algo_label = st.selectbox("Algorithme", algo_labels, index=default_algo_index)
+    algo_choice = algo_names[algo_labels.index(algo_label)]
     if algo_choice != st.session_state.algo:
         _pick_algo(algo_choice)
 
@@ -95,17 +100,56 @@ with col_ctrl:
     else:
         st.warning("Modele introuvable : la simulation utilisera une politique aleatoire.")
 
+    has_model = os.path.exists(current_model_path)
+
     env_keys = list(ENV_NAMES.keys())
     env_labels = [ENV_NAMES[key] for key in env_keys]
     current_env_index = env_keys.index(st.session_state.env) if st.session_state.env in env_keys else 0
     env_choice = st.radio("Environnement", env_labels, index=current_env_index)
     st.session_state.env = env_keys[env_labels.index(env_choice)]
 
-    mode_options = ["Simulation", "Robot Reel"]
-    mode_choice = st.radio("Mode", mode_options, index=mode_options.index(st.session_state.mode), horizontal=True)
-    st.session_state.mode = mode_choice
+    st.markdown("---")
 
-    if st.button("Lancer", type="primary", use_container_width=True):
+    # ── Boutons Réel / Simulé ─────────────────────────────────────────────
+    btn_reel, btn_sim = st.columns(2, gap="medium")
+    disabled_cls = " disabled" if not has_model else ""
+
+    with btn_reel:
+        st.markdown(
+            f'<div class="mode-btn reel{disabled_cls}">'
+            '<div class="icon">🤖</div>'
+            '<div class="label">Réel</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        reel_clicked = st.button(
+            "Lancer Réel" if has_model else "Pas de modèle",
+            key="btn_reel",
+            use_container_width=True,
+            disabled=not has_model,
+        )
+
+    with btn_sim:
+        st.markdown(
+            '<div class="mode-btn sim">'
+            '<div class="icon">📦</div>'
+            '<div class="label">Simulé</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        sim_clicked = st.button(
+            "Lancer Simulation",
+            key="btn_sim",
+            use_container_width=True,
+        )
+
+    if reel_clicked:
+        st.session_state.mode = "Robot Reel"
+        st.session_state.running = True
+        st.session_state.result = None
+        st.rerun()
+    if sim_clicked:
+        st.session_state.mode = "Simulation"
         st.session_state.running = True
         st.session_state.result = None
         st.rerun()
@@ -124,13 +168,16 @@ with col_res:
         mode_key  = st.session_state.mode
         _mpath    = model_path(algo_key)
 
+        _main_algo = ALGO_INFO[algo_key]["main_algo"]
+
         if mode_key == "Simulation":
             out_dir = tempfile.mkdtemp(prefix="yb_")
             with st.spinner(f"Simulation : {algo_key}  /  {ENV_NAMES.get(env_key, env_key)} ..."):
                 try:
                     proc = subprocess.run(
                         [sys.executable, RUN_EPISODE_SCRIPT,
-                         env_key, _mpath if os.path.exists(_mpath) else "none",
+                         env_key, _main_algo,
+                         _mpath if os.path.exists(_mpath) else "none",
                          out_dir, "300"],
                         capture_output=True, text=True, timeout=180,
                     )
@@ -149,7 +196,8 @@ with col_res:
                 except Exception as e:
                     res = {"error": str(e), "_mode": "sim"}
         else:
-            res = {"_mode": "reel", "_algo": algo_key, "_env": env_key, "_mpath": _mpath}
+            res = {"_mode": "reel", "_algo": algo_key, "_env": env_key,
+                   "_mpath": _mpath, "_main_algo": _main_algo}
 
         st.session_state.result  = res
         st.session_state.running = False
@@ -203,14 +251,16 @@ with col_res:
         _reward  = result.get("total_reward")
         _steps   = result.get("n_steps")
         _success = result.get("is_success")
+        _dist    = result.get("distance")
         _sc_str  = "Oui" if _success else "Non" if _success is not None else "—"
         _env_lbl = ENV_NAMES.get(result.get("_env", ""), result.get("_env", "—"))
         _mdl_lbl = "Aleatoire" if result.get("model") == "random" else os.path.basename(result.get("model", "—"))
 
-        metric_a, metric_b, metric_c = st.columns(3)
+        metric_a, metric_b, metric_c, metric_d = st.columns(4)
         metric_a.metric("Recompense totale", f"{_reward:.3f}" if isinstance(_reward, float) else "—")
         metric_b.metric("Etapes", _steps if _steps is not None else "—")
         metric_c.metric("Succes", _sc_str)
+        metric_d.metric("Distance", f"{_dist:.4f}" if _dist is not None else "—")
 
         st.write(f"Algorithme : {result.get('_algo', '—')}")
         st.write(f"Environnement : {_env_lbl}")
@@ -247,10 +297,13 @@ with col_res:
         st.write(f"Environnement : {_env_lbl}")
         st.write(f"Modele : {'Disponible' if _mok else 'Absent'}")
 
+        _main_algo = result.get("_main_algo", "sac")
+        _env_key   = result.get("_env", "reaching")
         if _mok:
             st.info(
-                "Pour executer sur le robot reel, lancez le script suivant dans un terminal :\n\n"
-                "```bash\npython src/robot/sim_to_real.py\n```"
+                "Pour executer sur le robot reel, lancez dans un terminal :\n\n"
+                f"```bash\ncd {os.path.join(os.path.dirname(APP_DIR))}\n"
+                f"python src/robot/main.py --env {_env_key} --algo {_main_algo} --render --real\n```"
             )
         else:
             st.warning(
