@@ -15,7 +15,7 @@ import numpy as np
 
 
 # Chemin vers la scène MuJoCo
-SCENE_XML = os.path.join(os.path.dirname(__file__), "/robot_env/scene_push.xml")
+SCENE_XML = os.path.join(os.path.dirname(__file__), "robot_env/scene_push.xml")
 
 # Pas de simulation MuJoCo par défaut (s)
 DEFAULT_SIM_DT: float = 0.005   # 5 ms => 200 Hz

@@ -22,7 +22,7 @@ ADDR_PRESENT_POS     = 37
 THRESHOLD_RAW        = 10   # écart max admissible en unités brutes (~5°)
 PROTOCOL_VERSION     = 2.0
 BAUDRATE           = 1000000
-DEVICENAME         = '/dev/ttyUSB0'
+DEVICENAME         = '/dev/ttyACM0'
 IDS = [1, 2, 3]
 
 # --- Paramètres communs ---
@@ -46,7 +46,7 @@ CORNERS = [
 
 # --- Chargement du modèle et configuration du solver placo ---
 robot = placo.RobotWrapper(
-    "3dofs_model/robot.xml",placo.Flags.mjcf)
+    "robot_env/robot.xml",placo.Flags.mjcf)
 
 solver = placo.KinematicsSolver(robot)
 solver.mask_fbase(True)

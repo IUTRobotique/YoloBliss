@@ -14,6 +14,7 @@ import argparse
 import os
 import time
 from pathlib import Path
+import sim_to_real
 
 import numpy as np
 from stable_baselines3 import PPO, SAC, TD3
@@ -135,6 +136,7 @@ if __name__ == "__main__":
 
     rewards, successes, distances = [], [], []
 
+    sim_to_real.init_real_robot()
     for ep in range(args.episodes):
         obs, _ = env.reset()
         done = False
@@ -142,6 +144,10 @@ if __name__ == "__main__":
 
         while not done:
             action, _ = model.predict(obs, deterministic=True)
+            obs, reward, terminated, truncated, info = env.step(action)
+            motor_joints = env._inner.sim.get_qpos()
+            sim_to_real.update_real_robot_position(motor_joints)
+
             obs, reward, terminated, truncated, info = env.step(action)
             env.render()
             total_reward += reward
@@ -157,6 +163,7 @@ if __name__ == "__main__":
         print(f"Ep {ep+1:3d}: reward={total_reward:7.2f}  "
               f"success={info.get('is_success', False)}  dist={dist_value:.4f}")
 
+    sim_to_real.close_real_robot()
     env.close()
 
     print(f"\n--- {args.env} | {args.algo} | {args.episodes} episodes ---")

@@ -2,7 +2,7 @@
 <!-- Generated using onshape-to-robot -->
 <!-- Onshape https://cad.onshape.com/documents/9cd2d37f10a20c963aa8c3b1/w/751e7ec4f0185e2cc133f396/e/9a387e7c90ee018179d50e3b -->
 <mujoco model="3dofs_model">
-  <compiler angle="radian" meshdir="assets" autolimits="true"/>
+  <compiler angle="radian" meshdir="." autolimits="true"/>
   <default>
     <default class="3dofs_model">
       <position kp="0.0834356288486003" forcerange="-0.413195026823429 0.413195026823429"/>
