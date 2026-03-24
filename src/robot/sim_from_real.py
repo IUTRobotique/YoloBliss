@@ -7,7 +7,7 @@ from ultralytics import YOLO
 import os
 
 from stable_baselines3 import SAC, PPO, TD3
-from main import make_eval_env, resolve_model_path, ALGO_CLS
+from main import make_eval_env, resolve_model_path, ALGO_CLS, ENVS
 
 class SimFromReal:
     def __init__(self, args):
@@ -48,12 +48,12 @@ class SimFromReal:
         ], dtype=np.float32)
         
         # --- MODELE RL ---
-        model_path = args.rl_model if args.rl_model else resolve_model_path(args.algo)
+        model_path = args.rl_model if args.rl_model else resolve_model_path(args.env, args.algo)
         print(f"[INIT] Chargement du modèle RL ({model_path})...")
         
         # --- INITIALISATION DE L'ENVIRONNEMENT (Avec Affichage 3D Humain) ---
         print("[INIT] Lancement de l'environnement MuJoCo avec le visualiseur...")
-        self.env = make_eval_env(args.algo, True)
+        self.env = make_eval_env(args.env, args.algo, True)
         
         self.model = ALGO_CLS[args.algo].load(str(model_path), env=self.env)
         self.obs, _ = self.env.reset()
@@ -143,8 +143,12 @@ class SimFromReal:
 
                     # 2. On injecte dans le monde virtuel
                     inner_env = self.env._inner if hasattr(self.env, "_inner") else self.env
-                    z_pos = 0.0135 # Hauteur du cube dans la simu
-                    inner_env.sim.set_cube_pose([target_pos[0], target_pos[1], z_pos])
+                    if self.args.env == "reaching":
+                        inner_env.sim.set_goal_marker(target_pos)
+                        inner_env._goal = target_pos
+                    else:
+                        z_pos = 0.0135 # Hauteur du cube dans la simu
+                        inner_env.sim.set_cube_pose([target_pos[0], target_pos[1], z_pos])
                 
                 # On recrée l'observation correcte depuis le simulateur mis-à-jour
                 if hasattr(self.env, "_build_obs"):
@@ -182,6 +186,7 @@ class SimFromReal:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Miroir du Réel vers la Simulation")
+    parser.add_argument("--env", required=True, choices=list(ENVS.keys()), help="Environnement (reaching, push, etc)")
     parser.add_argument("--algo", required=True, choices=ALGO_CLS.keys(), help="Algorithme (her, sac, td3, ppo)")
     parser.add_argument("--rl_model", type=str, default="", help="Optionnel: Chemin direct vers le modèle RL (.zip)")
     parser.add_argument("--yolo_model", type=str, default="./best.pt", help="Chemin vers le modèle YOLO")
