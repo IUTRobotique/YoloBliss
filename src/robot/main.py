@@ -1,19 +1,10 @@
-"""Test des modeles entraines sur tous les environnements.
-
-Usage :
-    python main.py --env reaching --algo sac
-    python main.py --env push --algo sac --render
-    python main.py --env sliding --algo sac
-    python main.py --env push_in_hole --algo her
-    python main.py --env sorting --algo her
-"""
-
 from __future__ import annotations
 
 import argparse
 import os
 import time
 from pathlib import Path
+import sim_to_real
 
 import numpy as np
 from stable_baselines3 import PPO, SAC, TD3
@@ -94,14 +85,15 @@ def make_eval_env(env_name: str, algo: str, render: bool):
     env_cls = ENVS[env_name]
 
     if algo == "her":
-        # HER avec wrapper GoalEnv pour les envs qui le necessitent
+        # HER necessite le wrapper GoalEnv
         if env_name == "push_in_hole":
             from her_push_in_hole import PushInHoleGoalEnv
             return PushInHoleGoalEnv(render_mode=render_mode)
         elif env_name == "sorting":
             from her_sorting import SortingGoalEnv
             return SortingGoalEnv(render_mode=render_mode)
-        # reaching et push : SAC standard (entraines via her.py, pas de GoalEnv)
+        else:
+            raise ValueError(f"HER non supporte pour l'env '{env_name}' (pas de goal)")
 
     return env_cls(render_mode=render_mode)
 
@@ -125,6 +117,8 @@ if __name__ == "__main__":
                         help="Pause en secondes entre chaque step")
     parser.add_argument("--render", action="store_true",
                         help="Affiche MuJoCo en temps reel")
+    parser.add_argument("--real", action="store_true",
+                        help="Active le sim-to-real (robot physique)")
     args = parser.parse_args()
 
     env = make_eval_env(args.env, args.algo, args.render)
@@ -134,6 +128,9 @@ if __name__ == "__main__":
 
     rewards, successes, distances = [], [], []
 
+    if args.real:
+        sim_to_real.init_real_robot()
+
     for ep in range(args.episodes):
         obs, _ = env.reset()
         done = False
@@ -142,6 +139,11 @@ if __name__ == "__main__":
         while not done:
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
+
+            if args.real:
+                motor_joints = env._inner.sim.get_qpos()
+                sim_to_real.update_real_robot_position(motor_joints)
+
             env.render()
             total_reward += reward
             done = terminated or truncated
@@ -156,6 +158,8 @@ if __name__ == "__main__":
         print(f"Ep {ep+1:3d}: reward={total_reward:7.2f}  "
               f"success={info.get('is_success', False)}  dist={dist_value:.4f}")
 
+    if args.real:
+        sim_to_real.close_real_robot()
     env.close()
 
     print(f"\n--- {args.env} | {args.algo} | {args.episodes} episodes ---")
