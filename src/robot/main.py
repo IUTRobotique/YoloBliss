@@ -1,13 +1,3 @@
-"""Test des modeles entraines sur tous les environnements.
-
-Usage :
-    python main.py --env reaching --algo sac
-    python main.py --env push --algo sac --render
-    python main.py --env sliding --algo sac
-    python main.py --env push_in_hole --algo her
-    python main.py --env sorting --algo her
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -95,14 +85,15 @@ def make_eval_env(env_name: str, algo: str, render: bool):
     env_cls = ENVS[env_name]
 
     if algo == "her":
-        # HER avec wrapper GoalEnv pour les envs qui le necessitent
+        # HER necessite le wrapper GoalEnv
         if env_name == "push_in_hole":
             from her_push_in_hole import PushInHoleGoalEnv
             return PushInHoleGoalEnv(render_mode=render_mode)
         elif env_name == "sorting":
             from her_sorting import SortingGoalEnv
             return SortingGoalEnv(render_mode=render_mode)
-        # reaching et push : SAC standard (entraines via her.py, pas de GoalEnv)
+        else:
+            raise ValueError(f"HER non supporte pour l'env '{env_name}' (pas de goal)")
 
     return env_cls(render_mode=render_mode)
 
