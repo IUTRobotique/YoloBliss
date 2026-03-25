@@ -6,7 +6,7 @@ ADDR_GOAL_POSITION = 30
 LEN_GOAL_POSITION = 2
 ADDR_PRESENT_POS = 37
 ADDR_MOVING_SPEED = 32 # Registre vitesse XL-320
-MOTOR_SPEED = 100
+MOTOR_SPEED = 300
 THRESHOLD_RAW = 10
 PROTOCOL_VERSION = 2.0
 BAUDRATE = 1000000
@@ -49,6 +49,7 @@ def init_real_robot():
     for dxl_id in IDS:
         groupSyncRead.addParam(dxl_id)
         print(f"[OK] Robot initialisé sur {DEVICENAME} (vitesse={MOTOR_SPEED}/1023)")
+
 
 def close_real_robot():
     for dxl_id in IDS:
