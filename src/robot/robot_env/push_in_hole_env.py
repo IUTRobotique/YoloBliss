@@ -1,7 +1,8 @@
-"""Environnement Gymnasium pour la tache de Push-in-Hole avec le robot 3-DDL.
+"""Environnement Gymnasium pour la tache de Push-on-Marker avec le robot 3-DDL.
 
-L'effecteur final doit pousser un cube pour le faire tomber dans un trou
-situe au niveau du sol.
+L'effecteur final doit pousser un cube pour l'aligner parfaitement sur un
+marqueur carre au sol (meme taille que le cube : 2.7 cm). Le succes exige
+un alignement en position ET en orientation (symetrie 4-fold du carre).
 """
 
 from __future__ import annotations
@@ -14,31 +15,23 @@ from gymnasium import spaces
 
 from sim_3dofs import Sim3Dofs
 
-# Scene MuJoCo avec le trou dans le sol
+# Scene MuJoCo avec sol plat + marqueur carre
 SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_push_in_hole.xml")
 
-# Position fixe du trou (centre)
-HOLE_POS = np.array([0.15, 0.0, 0.0])
+# Position fixe du marqueur (centre)
+MARKER_POS = np.array([0.15, 0.0, 0.0])
 
-# Bornes pour le tirage aleatoire de la position initiale du cube
-CUBE_X_RANGE = (0.06, 0.20)
-CUBE_Y_RANGE = (-0.10, 0.10)
-CUBE_Z = 0.0135  # demi-cote du cube, pose sur le sol
+# Tirage en anneau autour du robot
+OBJ_Z = 0.0135    # demi-cote du cube, pose sur le sol
+OBJ_DIST_MIN = 0.12   # pas trop pres de la base (m)
+OBJ_DIST_MAX = 0.20   # portee max du robot (m)
 
-# Distance minimale du cube par rapport à la base du robot (m)
-MIN_BASE_DIST = 0.15
+# Distance min entre le cube et le marqueur au spawn
+MIN_CUBE_MARKER_DIST = 0.05
 
-# Distance min entre le cube et le trou au spawn (pour eviter qu'il tombe direct)
-MIN_CUBE_HOLE_DIST = 0.1
-
-# Curriculum HER: distance min cube-trou augmente progressivement selon l'episode
-# AUGMENTÉ pour permettre une phase d'apprentissage plus longue avant augmentation de difficulté
-CURRICULUM_MIN_DIST_START = 0.02
-CURRICULUM_MIN_DIST_END = MIN_CUBE_HOLE_DIST
-CURRICULUM_EPISODES = 2000
-
-# Seuil de succes : le cube est tombe dans le trou si son z < ce seuil
-SUCCESS_Z_THRESHOLD = -0.01
+# Seuils de succes : position xy ET orientation
+SUCCESS_POS_THRESHOLD = 0.005   # 5 mm de tolerance en position
+SUCCESS_YAW_THRESHOLD = 0.10    # ~5.7 deg de tolerance en yaw (cos/sin)
 
 # Duree max d'un episode
 MAX_EPISODE_STEPS = 400
@@ -46,31 +39,25 @@ MAX_EPISODE_STEPS = 400
 # Coefficient de penalite pour le lissage des actions
 ACTION_RATE_COEFF = 0.01
 
-# Penalite temporelle par step pour favoriser des episodes courts
+# Penalite temporelle par step
 STEP_TIME_PENALTY = 0.05
 
-# Seuil de saturation de l'approche effecteur -> cube (m)
-APPROACH_SATURATION_DIST = 0.03
+
+def _yaw_error_4fold(cos_yaw: float, sin_yaw: float) -> float:
+    """Erreur d'orientation minimale en tenant compte de la symetrie 4-fold.
+
+    Un carre est identique a 0, 90, 180, 270 deg. On calcule l'erreur
+    angulaire par rapport a chacune de ces orientations et on garde la plus
+    petite. Retourne une valeur dans [0, pi/4] (max 45 deg).
+    """
+    yaw = np.arctan2(sin_yaw, cos_yaw)
+    # Ramener dans [0, pi/2) grace a la symetrie 4-fold
+    yaw_mod = yaw % (np.pi / 2)
+    # Erreur = distance au multiple de 90 deg le plus proche
+    return min(yaw_mod, np.pi / 2 - yaw_mod)
 
 
 class PushInHoleEnv(gym.Env):
-    """Env Gymnasium : pousser le cube dans le trou.
-
-    Observation (dim 12) :
-        - qpos                (3)  positions articulaires
-        - ee_pos              (3)  position cartesienne de l'effecteur
-        - cube_pos            (3)  position du cube
-        - cube_to_hole        (3)  vecteur cube -> trou
-
-    Action (dim 3) :
-        - positions articulaires cibles (envoyees aux actionneurs MuJoCo)
-
-    Reward (staged) :
-        Phase 1 : -distance(ee, cube)       (approach the cube)
-        Phase 2 : once close to cube, -distance(cube, hole) in xy
-        + bonus si le cube tombe dans le trou
-        - penalite de lissage (action_rate)
-    """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 25}
 
@@ -79,16 +66,13 @@ class PushInHoleEnv(gym.Env):
 
         self.render_mode = render_mode
 
-        # Simulation MuJoCo
         self.sim = Sim3Dofs(
             render_mode=render_mode,
             scene_xml=SCENE_XML,
         )
 
-        # Espaces
         n_act = self.sim.n_actuators  # 3
 
-        # Actions : positions articulaires cibles en radians
         act_limit = 2.618
         self.action_space = spaces.Box(
             low=-act_limit,
@@ -97,8 +81,8 @@ class PushInHoleEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Observations : qpos(3) + ee(3) + cube(3) + cube_to_hole(3) = 12
-        obs_high = np.full(12, np.inf, dtype=np.float32)
+        # Observations : qpos(3) + ee(3) + cube(3) + cube_to_marker(3) + yaw(2) = 14
+        obs_high = np.full(14, np.inf, dtype=np.float32)
         self.observation_space = spaces.Box(
             low=-obs_high,
             high=obs_high,
@@ -106,83 +90,75 @@ class PushInHoleEnv(gym.Env):
         )
 
         # Etat interne
-        self._hole_pos: np.ndarray = HOLE_POS.copy()
-        self._initial_cube_pos: np.ndarray = np.array([0.0, 0.0, CUBE_Z], dtype=float)
+        self._marker_pos: np.ndarray = MARKER_POS.copy()
+        self._initial_cube_pos: np.ndarray = np.array([0.0, 0.0, OBJ_Z], dtype=float)
         self._prev_action: np.ndarray = np.zeros(n_act)
         self._step_count: int = 0
         self._episode_count: int = 0
 
-    def _current_min_cube_hole_dist(self) -> float:
-        """Distance min cube-trou selon la progression du curriculum."""
-        progress = min(1.0, self._episode_count / float(CURRICULUM_EPISODES))
-        return float(
-            CURRICULUM_MIN_DIST_START
-            + progress * (CURRICULUM_MIN_DIST_END - CURRICULUM_MIN_DIST_START)
-        )
-
     # -- Helpers --
 
     def _sample_cube_pos(self) -> np.ndarray:
-        """Tire une position initiale pour le cube, assez loin du trou et de la base."""
-        min_cube_hole_dist = self._current_min_cube_hole_dist()
+        """Position aleatoire en anneau autour du robot, assez loin du marqueur."""
         for _ in range(100):
-            pos = np.array([
-                self.np_random.uniform(*CUBE_X_RANGE),
-                self.np_random.uniform(*CUBE_Y_RANGE),
-                CUBE_Z,
-            ])
-            dist_xy = np.linalg.norm(pos[:2] - self._hole_pos[:2])
-            if dist_xy > min_cube_hole_dist and np.linalg.norm(pos) >= MIN_BASE_DIST:
+            angle = self.np_random.uniform(-np.pi, np.pi)
+            dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
+            pos = np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
+            dist_marker = np.linalg.norm(pos[:2] - self._marker_pos[:2])
+            if dist_marker > MIN_CUBE_MARKER_DIST:
                 return pos
-        # Fallback : position par defaut loin du trou et de la base
-        return np.array([0.10, 0.08, CUBE_Z])
+        # Fallback
+        return np.array([0.10, 0.08, OBJ_Z])
 
     def _get_obs(self) -> np.ndarray:
         """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
         qpos = self.sim.get_qpos()
         ee_pos = self.sim.get_end_effector_pos()
         cube_pos = self.sim.get_cube_pos()
+        cube_yaw = self.sim.get_cube_yaw_cossin()
 
-        # Simule l'imprecision des moteurs et de la camera.
+        # Bruit sim-to-real
         qpos += self.np_random.normal(0, 0.005, size=qpos.shape)
-        cube_pos += self.np_random.normal(0, 0.002, size=cube_pos.shape)
+        cube_pos += self.np_random.normal(0, 0.005, size=cube_pos.shape)
+        cube_yaw += self.np_random.normal(0, 0.01, size=cube_yaw.shape)
 
-        cube_to_hole = self._hole_pos - cube_pos
+        cube_to_marker = self._marker_pos - cube_pos
         return np.concatenate([
-            qpos, ee_pos, cube_pos, cube_to_hole,
+            qpos, ee_pos, cube_pos, cube_to_marker, cube_yaw,
         ]).astype(np.float32)
 
     def _compute_reward(self, action: np.ndarray) -> tuple[float, bool]:
-        """Récompense dense linéaire et simplifié, relabellisable par HER.
-
-        Phase 1 (approche) : -2.0 * distance(ee, cube), saturée sous 3 cm
-        Phase 2 (push) : -5.0 * distance_xy(cube, trou) guide prioritairement vers le trou
-        Succès : +100 si le cube tombe dans le trou
-        Régularisation : -ACTION_RATE_COEFF * ||a_t - a_{t-1}||^2
-        Pression temporelle : -STEP_TIME_PENALTY par step
-        """
+        """Recompense dense : position + orientation vers le marqueur."""
         ee_pos = self.sim.get_end_effector_pos()
         cube_pos = self.sim.get_cube_pos()
+        cube_yaw = self.sim.get_cube_yaw_cossin()
 
         dist_ee_cube = float(np.linalg.norm(ee_pos - cube_pos))
-        dist_cube_hole_xy = float(np.linalg.norm(cube_pos[:2] - self._hole_pos[:2]))
+        dist_cube_marker_xy = float(np.linalg.norm(cube_pos[:2] - self._marker_pos[:2]))
+        yaw_error = _yaw_error_4fold(cube_yaw[0], cube_yaw[1])
 
-        # Terme d'approche saturé : aucune incitation à « danser » à moins de 3 cm.
-        approach_dist = max(0.0, dist_ee_cube - APPROACH_SATURATION_DIST)
-        reward = -2.0 * approach_dist
+        # Approche : guider l'effecteur vers le cube
+        reward = -2.0 * dist_ee_cube
 
-        # Objectif principal : pousser le cube vers le trou.
-        reward -= 5.0 * dist_cube_hole_xy
+        # Position : pousser le cube vers le marqueur
+        reward -= 5.0 * dist_cube_marker_xy
 
-        # Pression temporelle : finir vite.
+        # Orientation : ne compte que quand le cube est deja sur le marqueur
+        if dist_cube_marker_xy < SUCCESS_POS_THRESHOLD:
+            reward -= 3.0 * yaw_error
+
+        # Pression temporelle
         reward -= STEP_TIME_PENALTY
 
-        # Bonus succès terminal
-        is_success = cube_pos[2] < SUCCESS_Z_THRESHOLD
-        if is_success:
-            reward += 100.0
+        # Succes : position ET orientation alignees
+        pos_ok = dist_cube_marker_xy < SUCCESS_POS_THRESHOLD
+        yaw_ok = yaw_error < SUCCESS_YAW_THRESHOLD
+        is_success = pos_ok and yaw_ok
 
-        # Lissage des commandes (actions saccadées penalisees).
+        if is_success:
+            reward += 150.0
+
+        # Lissage des commandes
         action_rate = float(np.sum((action - self._prev_action) ** 2))
         reward -= ACTION_RATE_COEFF * action_rate
 
@@ -190,30 +166,27 @@ class PushInHoleEnv(gym.Env):
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
-        self.sim.reset()
+        # Pose initiale aleatoire (sim-to-real)
+        qpos_init = self.np_random.uniform(-0.1, 0.1, size=(3,))
+        self.sim.reset(qpos=qpos_init)
 
-        # Curriculum : au début, spawn le cube plus près de l'effecteur
-        # pour accélérer le bootstrap initial
+        # Bootstrap : les 50 premiers episodes, cube proche du marqueur
         if self._episode_count < 50:
-            # Position facilitée : cube proche et stationnaire
-            cube_pos = np.array([0.10, 0.05, CUBE_Z])
+            cube_pos = np.array([0.10, 0.05, OBJ_Z])
         else:
-            # Sampling aléatoire standard après bootstrap
             cube_pos = self._sample_cube_pos()
 
         self.sim.set_cube_pose(pos=cube_pos)
         self.sim.forward()
-        self.sim.set_goal_marker(self._hole_pos)
+        self.sim.set_goal_marker(self._marker_pos)
 
-        # Position de reference pour mesurer le deplacement du cube.
         self._initial_cube_pos = cube_pos.copy()
-
         self._prev_action = np.zeros(self.sim.n_actuators)
         self._step_count = 0
         self._episode_count += 1
 
         info = {
-            "hole_pos": self._hole_pos.copy(),
+            "marker_pos": self._marker_pos.copy(),
             "cube_pos": cube_pos.copy(),
             "episode_num": self._episode_count,
         }
@@ -222,28 +195,24 @@ class PushInHoleEnv(gym.Env):
     def step(self, action: np.ndarray):
         action = np.asarray(action, dtype=np.float32)
 
-        # Appliquer l'action
         self.sim.step(action)
         self._step_count += 1
 
-        # Observation
         obs = self._get_obs()
-
-        # Recompense
         reward, is_success = self._compute_reward(action)
 
-        # Terminaison
         terminated = is_success
         truncated = self._step_count >= MAX_EPISODE_STEPS
 
         cube_pos = self.sim.get_cube_pos()
-        displacement = float(np.linalg.norm(cube_pos - self._initial_cube_pos))
+        cube_yaw = self.sim.get_cube_yaw_cossin()
+        yaw_error = _yaw_error_4fold(cube_yaw[0], cube_yaw[1])
         info = {
             "is_success": is_success,
-            "dist_cube_hole": float(np.linalg.norm(cube_pos[:2] - self._hole_pos[:2])),
-            "cube_displacement": displacement,
-            "cube_z": float(cube_pos[2]),
-            "hole_pos": self._hole_pos.copy(),
+            "dist_cube_marker": float(np.linalg.norm(cube_pos[:2] - self._marker_pos[:2])),
+            "yaw_error_deg": float(np.degrees(yaw_error)),
+            "cube_displacement": float(np.linalg.norm(cube_pos - self._initial_cube_pos)),
+            "marker_pos": self._marker_pos.copy(),
         }
 
         self._prev_action = action.copy()

@@ -112,7 +112,7 @@ def make_eval_env(env_name: str, algo: str, render: bool):
 
 def extract_distance(info: dict) -> float:
     """Recupere une metrique de distance disponible dans info."""
-    for key in ("distance", "cube_displacement", "dist_cube_hole", "dist_cube_goal", "dist_cylinder_goal"):
+    for key in ("distance", "cube_displacement", "dist_cube_marker", "dist_cube_hole", "dist_cube_goal", "dist_cylinder_goal"):
         if key in info:
             return float(info[key])
     return float("nan")

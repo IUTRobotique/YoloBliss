@@ -15,48 +15,22 @@
             width="300" height="300" />
         <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5"
             reflectance="0.2" />
-        <!-- Bord du trou -->
-        <material name="hole_mat" rgba="0.15 0.15 0.15 1" />
         <!-- Cube PLA imprime 3D -->
         <material name="cube_mat" rgba="0.15 0.75 0.25 1" />
-        <!-- Marqueur du trou -->
+        <!-- Marqueur cible (rouge, meme taille que le cube) -->
         <material name="goal_mat" rgba="1 0.2 0.2 0.65" />
     </asset>
 
     <worldbody>
         <light pos="0 0 3.5" dir="0 0 -1" directional="true" />
 
-        <!--
-            Sol avec trou : on remplace le plan infini par 4 dalles.
-            Trou carre centre en (0.15, 0), demi-cote 0.025 m (5 cm x 5 cm).
-            Le trou va de x:[0.125, 0.175], y:[-0.025, 0.025].
-            Dalles epaisseur 0.01 m (demi = 0.005), surface a z=0.
-        -->
-        <!-- Dalle arriere : x de -0.5 a 0.125 -->
-        <geom name="floor_back" type="box"
-              size="0.3125 0.5 0.005" pos="-0.1875 0 -0.005"
-              material="groundplane" />
-        <!-- Dalle avant : x de 0.175 a 0.5 -->
-        <geom name="floor_front" type="box"
-              size="0.1625 0.5 0.005" pos="0.3375 0 -0.005"
-              material="groundplane" />
-        <!-- Dalle gauche : x de 0.125 a 0.175, y de -0.5 a -0.025 -->
-        <geom name="floor_left" type="box"
-              size="0.025 0.2375 0.005" pos="0.15 -0.2625 -0.005"
-              material="groundplane" />
-        <!-- Dalle droite : x de 0.125 a 0.175, y de 0.025 a 0.5 -->
-        <geom name="floor_right" type="box"
-              size="0.025 0.2375 0.005" pos="0.15 0.2625 -0.005"
+        <!-- Sol plat -->
+        <geom name="floor" size="0 0 0.05" type="plane"
               material="groundplane" />
 
-        <!-- Fond du trou (pour que le cube ne tombe pas a l'infini) -->
-        <geom name="hole_bottom" type="box"
-              size="0.025 0.025 0.001" pos="0.15 0 -0.06"
-              material="hole_mat" />
-
-        <!-- Marqueur visuel du trou : disque rouge au sol (mocap, pas de collision) -->
-        <body name="goal_marker" mocap="true" pos="0.15 0 0.001">
-            <geom type="cylinder" size="0.026 0.0005" material="goal_mat"
+        <!-- Marqueur cible : carre 2.7cm x 2.7cm (meme taille que le cube) -->
+        <body name="goal_marker" mocap="true" pos="0.15 0 0.0005">
+            <geom type="box" size="0.0135 0.0135 0.0005" material="goal_mat"
                 contype="0" conaffinity="0" group="2" />
         </body>
 

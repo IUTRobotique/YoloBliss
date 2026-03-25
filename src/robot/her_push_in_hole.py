@@ -14,7 +14,13 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.her.her_replay_buffer import HerReplayBuffer
 
-from robot_env.push_in_hole_env import PushInHoleEnv, SUCCESS_Z_THRESHOLD, MAX_EPISODE_STEPS
+from robot_env.push_in_hole_env import (
+    PushInHoleEnv,
+    SUCCESS_POS_THRESHOLD,
+    SUCCESS_YAW_THRESHOLD,
+    MAX_EPISODE_STEPS,
+    _yaw_error_4fold,
+)
 
 TOTAL_TIMESTEPS: int = 300_000
 BUFFER_SIZE: int = 1_000_000
@@ -25,7 +31,6 @@ TAU: float = 0.005
 LEARNING_RATE: float = 3e-4
 GRADIENT_STEPS: int = 1
 
-#nombre de buts virtuels relabellisés par transition réelle
 N_SAMPLED_GOAL: int = 4
 
 POLICY_KWARGS: dict[str, object] = {
@@ -38,12 +43,6 @@ LOG_DIR: str = os.path.join(os.path.dirname(__file__), "logs", "her_sac")
 
 
 class _RenderCallback(BaseCallback):
-    """Appelle training_env.render() à chaque pas de collecte.
-
-    SB3 ne déclenche pas le rendu automatiquement pendant learn() ;
-    ce callback est le seul moyen d'afficher la simulation en temps réel.
-    """
-
     def _on_step(self) -> bool:
         self.training_env.render("human")
         return True
@@ -52,54 +51,47 @@ class _RenderCallback(BaseCallback):
 class PushInHoleGoalEnv(gym.Env):
     """Adaptateur GoalEnv de PushInHoleEnv pour HerReplayBuffer.
 
-    Transforme l'observation vectorielle de PushInHoleEnv (dim 15) en un
-    dictionnaire GoalEnv avec la décomposition :
-
-    ``observation``   (6) : état robot [qpos(3) | ee_pos(3)]
-    ``achieved_goal`` (3) : position 3D courante du cube
-    ``desired_goal``  (3) : position 3D du trou (cible)
-
-    Cette décomposition est indispensable pour que HerReplayBuffer puisse
-    substituer ``desired_goal`` par l'``achieved_goal`` d'une transition future
-    lors du relabelling, puis appeler ``compute_reward`` pour recalculer la
-    récompense de la transition relabellisée.
-    L'état robot est séparé du but pour éviter que l'agent apprenne à exploiter
-    les vecteurs dérivés du but (cube_to_hole) contenus dans
-    l'observation brute de PushInHoleEnv.
+    observation   (6) : etat robot [qpos(3) | ee_pos(3)]
+    achieved_goal (5) : cube_pos(3) + cube_yaw_cossin(2)
+    desired_goal  (5) : marker_pos(3) + target_yaw_cossin(2) = [x, y, z, 1, 0]
     """
 
     metadata: dict[str, Any] = {"render_modes": ["human", "rgb_array"], "render_fps": 25}
 
-    def __init__(self, render_mode: str | None =None) -> None:
+    def __init__(self, render_mode: str | None = None) -> None:
         super().__init__()
         self.render_mode: str | None = render_mode
         self._inner: PushInHoleEnv = PushInHoleEnv(render_mode=render_mode)
 
-        obs_dim: int = 6   #qpos(3) + ee_pos(3) : état robot sans les vecteurs dérivés du but
-        goal_dim: int = 3
+        obs_dim: int = 6   # qpos(3) + ee_pos(3)
+        goal_dim: int = 5  # pos(3) + yaw_cossin(2)
 
-        obs_high: np.ndarray = np.full(obs_dim, np.inf, dtype=np.float32)
-        goal_high: np.ndarray = np.full(goal_dim, np.inf, dtype=np.float32)
+        obs_high = np.full(obs_dim, np.inf, dtype=np.float32)
+        goal_high = np.full(goal_dim, np.inf, dtype=np.float32)
 
-        self.observation_space: spaces.Dict = spaces.Dict({
+        self.observation_space = spaces.Dict({
             "observation":   spaces.Box(-obs_high, obs_high, dtype=np.float32),
             "achieved_goal": spaces.Box(-goal_high, goal_high, dtype=np.float32),
             "desired_goal":  spaces.Box(-goal_high, goal_high, dtype=np.float32),
         })
-        self.action_space: spaces.Box = self._inner.action_space
+        self.action_space = self._inner.action_space
+
+        # Le goal en orientation est yaw=0 (cos=1, sin=0), mais grace a la
+        # symetrie 4-fold, 90/180/270 sont aussi valides.
+        self._desired_goal = np.array([
+            *self._inner._marker_pos, 1.0, 0.0
+        ], dtype=np.float32)
 
     def _build_obs(self) -> dict[str, np.ndarray]:
-        """Construit l'observation GoalEnv depuis l'état courant de la simulation.
-        Returns:
-            dict[str, np.ndarray]: dictionnaire avec les trois clés GoalEnv.
-        """
-        qpos: np.ndarray = self._inner.sim.get_qpos()
-        ee_pos: np.ndarray = self._inner.sim.get_end_effector_pos()
-        cube_pos: np.ndarray = self._inner.sim.get_cube_pos()
+        qpos = self._inner.sim.get_qpos()
+        ee_pos = self._inner.sim.get_end_effector_pos()
+        cube_pos = self._inner.sim.get_cube_pos()
+        cube_yaw = self._inner.sim.get_cube_yaw_cossin()
+
         return {
             "observation":   np.concatenate([qpos, ee_pos]).astype(np.float32),
-            "achieved_goal": cube_pos.astype(np.float32),
-            "desired_goal":  self._inner._hole_pos.astype(np.float32),
+            "achieved_goal": np.concatenate([cube_pos, cube_yaw]).astype(np.float32),
+            "desired_goal":  self._desired_goal.copy(),
         }
 
     def compute_reward(
@@ -108,46 +100,46 @@ class PushInHoleGoalEnv(gym.Env):
         desired_goal: np.ndarray,
         info: dict[str, Any],
     ) -> np.ndarray:
-        """Récompense relabellisable : appelée par HerReplayBuffer lors du relabelling.
-
-        Doit accepter des batchs : achieved_goal et desired_goal peuvent être
-        de forme (batch_size, 3) ou (3,).
-        La récompense est basée sur la distance xy cube→trou uniquement :
-        les termes impliquant l'effecteur (ee→cube) ne sont pas relabellisables
-        car la position de l'ee n'est pas dans l'espace des buts.
-        Parameters:
-            achieved_goal (np.ndarray): position(s) 3D du cube
-            desired_goal (np.ndarray): position(s) 3D du trou substitué(s) par HER
-            info (dict): ignoré ici, présent pour respecter l'interface GoalEnv
-        Returns:
-            np.ndarray: récompenses de forme (batch_size,) ou scalaire float.
-        """
-        #axis=-1 supporte à la fois les batchs (B, 3) et les vecteurs (3,)
-        dist_xy: np.ndarray = np.linalg.norm(
+        """Recompense relabellisable par HER. Supporte les batchs (B, 5)."""
+        # Distance xy position
+        dist_xy = np.linalg.norm(
             achieved_goal[..., :2] - desired_goal[..., :2], axis=-1
         ).astype(np.float32)
-        reward: np.ndarray = -dist_xy
-        #succès : le cube est tombé dans le trou (z suffisamment négatif)
-        reward += 10.0 * (achieved_goal[..., 2] < SUCCESS_Z_THRESHOLD).astype(np.float32)
+
+        reward = -dist_xy
+
+        # Bonus succes position + orientation
+        pos_ok = dist_xy < SUCCESS_POS_THRESHOLD
+
+        # Orientation error (4-fold symmetry)
+        cos_yaw = achieved_goal[..., 3]
+        sin_yaw = achieved_goal[..., 4]
+        yaw_err = np.vectorize(_yaw_error_4fold)(cos_yaw, sin_yaw)
+        yaw_ok = yaw_err < SUCCESS_YAW_THRESHOLD
+
+        # Orientation ne compte que quand le cube est sur le marqueur
+        reward -= 0.5 * np.where(pos_ok, yaw_err, 0.0).astype(np.float32)
+        reward += 10.0 * (pos_ok & yaw_ok).astype(np.float32)
+
         return reward
 
-    def reset(self, *, seed: int | None =None, options: dict | None =None):
+    def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         self._inner.reset(seed=seed, options=options)
-        obs: dict[str, np.ndarray] = self._build_obs()
-        return obs, {"hole_pos": self._inner._hole_pos.copy()}
+        obs = self._build_obs()
+        return obs, {"marker_pos": self._inner._marker_pos.copy()}
 
     def step(self, action: np.ndarray):
-        #on délègue l'avance de simulation à l'env interne, on récupère son info
         _, _, terminated, truncated, inner_info = self._inner.step(action)
 
-        obs: dict[str, np.ndarray] = self._build_obs()
-        cube_pos: np.ndarray = self._inner.sim.get_cube_pos()
-        reward: float = float(self.compute_reward(cube_pos, self._inner._hole_pos, {}))
+        obs = self._build_obs()
+        achieved = obs["achieved_goal"]
+        reward = float(self.compute_reward(achieved, self._desired_goal, {}))
 
-        info: dict[str, Any] = {
+        info = {
             "is_success": inner_info["is_success"],
-            "dist_cube_hole": inner_info["dist_cube_hole"],
+            "dist_cube_marker": inner_info["dist_cube_marker"],
+            "yaw_error_deg": inner_info["yaw_error_deg"],
         }
         return obs, reward, terminated, truncated, info
 
@@ -160,19 +152,8 @@ class PushInHoleGoalEnv(gym.Env):
 
 def make_her_sac(
     env: PushInHoleGoalEnv,
-    log_dir: str =LOG_DIR,
+    log_dir: str = LOG_DIR,
 ) -> SAC:
-    """Construit un SAC avec HerReplayBuffer sur PushInHoleGoalEnv.
-
-    La politique ``MultiInputPolicy`` traite automatiquement le dict d'observation
-    en concaténant ``observation``, ``achieved_goal`` et ``desired_goal`` via
-    un extracteur de features dédié.
-    Parameters:
-        env (PushInHoleGoalEnv): environnement GoalEnv (non vectorisé)
-        log_dir (str): répertoire TensorBoard
-    Returns:
-        SAC: modèle SAC+HER configuré, prêt pour model.learn().
-    """
     return SAC(
         "MultiInputPolicy",
         env,
@@ -186,7 +167,6 @@ def make_her_sac(
         replay_buffer_class=HerReplayBuffer,
         replay_buffer_kwargs={
             "n_sampled_goal": N_SAMPLED_GOAL,
-            #"future" : les buts relabellisés sont tirés parmi les transitions futures du même épisode
             "goal_selection_strategy": "future",
         },
         policy_kwargs=POLICY_KWARGS,
@@ -195,47 +175,26 @@ def make_her_sac(
     )
 
 
-def make_env(render_mode: str | None =None) -> PushInHoleGoalEnv:
-    """Crée une instance fraîche de PushInHoleGoalEnv.
-    Parameters:
-        render_mode (str | None): ``"human"`` pour afficher MuJoCo en temps réel,
-            ``None`` pour l'entraînement headless (plus rapide).
-    Returns:
-        PushInHoleGoalEnv: GoalEnv prête pour HER.
-    """
+def make_env(render_mode: str | None = None) -> PushInHoleGoalEnv:
     return PushInHoleGoalEnv(render_mode=render_mode)
 
 
 def train(
-    total_timesteps: int =TOTAL_TIMESTEPS,
-    model_dir: str =MODEL_DIR,
-    log_dir: str =LOG_DIR,
-    render: bool =False,
+    total_timesteps: int = TOTAL_TIMESTEPS,
+    model_dir: str = MODEL_DIR,
+    log_dir: str = LOG_DIR,
+    render: bool = False,
 ) -> SAC:
-    """Entraîne un agent SAC+HER sur la tâche de push-in-hole.
-
-    Avec N_SAMPLED_GOAL=4, chaque transition génère 4 transitions relabellisées
-    supplémentaires, soit un buffer effectif 5× plus dense en signal utile.
-    L'effet est surtout visible dans les 50 premiers épisodes où la courbe
-    « décolle » bien plus tôt que SAC sans HER.
-    Parameters:
-        total_timesteps (int): nombre total de pas d'environnement à simuler
-        model_dir (str): répertoire de sauvegarde du meilleur modèle
-        log_dir (str): répertoire TensorBoard
-        render (bool): affiche la simulation MuJoCo en temps réel si True
-    Returns:
-        SAC: agent SAC+HER entraîné.
-    """
     os.makedirs(model_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
 
-    render_mode: str | None = "human" if render else None
-    env: PushInHoleGoalEnv = make_env(render_mode=render_mode)
-    eval_env: VecEnv = make_vec_env(make_env, n_envs=1)
+    render_mode = "human" if render else None
+    env = make_env(render_mode=render_mode)
+    eval_env = make_vec_env(make_env, n_envs=1)
 
-    model: SAC = make_her_sac(env, log_dir=log_dir)
+    model = make_her_sac(env, log_dir=log_dir)
 
-    eval_callback: EvalCallback = EvalCallback(
+    eval_callback = EvalCallback(
         eval_env,
         best_model_save_path=model_dir,
         log_path=log_dir,
@@ -244,8 +203,7 @@ def train(
         deterministic=True,
     )
 
-    #SB3 n'appelle jamais env.render() dans la boucle learn() : callback nécessaire
-    callbacks: list[BaseCallback] = [eval_callback]
+    callbacks = [eval_callback]
     if render:
         callbacks.append(_RenderCallback())
 
@@ -258,16 +216,16 @@ def train(
 
 
 if __name__ == "__main__":
-    parser: argparse.ArgumentParser = argparse.ArgumentParser(
-        description="Entraînement SAC+HER sur le robot 3-DDL (MuJoCo)"
+    parser = argparse.ArgumentParser(
+        description="Entrainement SAC+HER sur push-on-marker (robot 3-DDL)"
     )
     parser.add_argument(
         "--timesteps", type=int, default=TOTAL_TIMESTEPS,
-        help=f"Nombre de pas d'environnement (défaut : {TOTAL_TIMESTEPS})"
+        help=f"Nombre de pas d'environnement (defaut : {TOTAL_TIMESTEPS})"
     )
     parser.add_argument(
         "--render", action="store_true",
-        help="Affiche la simulation MuJoCo en temps réel pendant l'entraînement"
+        help="Affiche la simulation MuJoCo en temps reel"
     )
-    args: argparse.Namespace = parser.parse_args()
+    args = parser.parse_args()
     train(total_timesteps=args.timesteps, render=args.render)

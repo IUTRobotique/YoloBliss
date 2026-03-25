@@ -41,7 +41,7 @@ REWARD_THRESHOLDS: dict[str, float] = {
     "push": 0.9,
     "reaching": 0.9,
 }
-
+    
 
 class _RenderCallback(BaseCallback):
     def _on_step(self) -> bool:

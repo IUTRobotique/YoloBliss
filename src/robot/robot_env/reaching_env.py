@@ -12,9 +12,9 @@ from sim_3dofs import Sim3Dofs
 SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_reaching.xml")
 
 OBJ_DIST_MIN = 0.10   # pas trop pres de la base (m)
-OBJ_DIST_MAX = 0.22   # portee max du robot (m)
+OBJ_DIST_MAX = 0.20   # portee max du robot (m)
 OBJ_Z_MIN = 0.0       # sol
-OBJ_Z_MAX = 0.20      # hauteur max atteignable (m)
+OBJ_Z_MAX = 0.15      # hauteur max atteignable (m)
 
 # Seuil de succès (m)
 SUCCESS_THRESHOLD = 0.02  # 2 cm
