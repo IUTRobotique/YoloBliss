@@ -14,7 +14,6 @@ import argparse
 import os
 import time
 from pathlib import Path
-import sim_to_real
 
 import numpy as np
 from stable_baselines3 import PPO, SAC, TD3
@@ -24,7 +23,6 @@ from robot_env.push_env import PushEnv
 from robot_env.sliding_env import SlidingEnv
 from robot_env.push_in_hole_env import PushInHoleEnv
 from robot_env.sorting_env import SortingEnv
-import sim_to_real
 
 # -- Environnements disponibles --
 ENVS = {
@@ -141,6 +139,7 @@ if __name__ == "__main__":
     rewards, successes, distances = [], [], []
 
     if args.real:
+        import sim_to_real
         sim_to_real.init_real_robot()
 
     for ep in range(args.episodes):
@@ -148,7 +147,6 @@ if __name__ == "__main__":
         done = False
         total_reward = 0.0
 
-        sim_to_real.init_real_robot()
         while not done:
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
