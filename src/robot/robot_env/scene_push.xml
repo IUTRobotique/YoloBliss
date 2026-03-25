@@ -17,12 +17,20 @@
             reflectance="0.2" />
         <!-- Cube PLA imprimé 3D -->
         <material name="cube_mat" rgba="0.15 0.75 0.25 1" />
+        <!-- Marqueur cible (rouge) -->
+        <material name="goal_mat" rgba="1 0.2 0.2 0.65" />
     </asset>
 
     <worldbody>
         <light pos="0 0 3.5" dir="0 0 -1" directional="true" />
         <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane"
             material="groundplane" />
+
+        <!-- Marqueur cible : disque au sol -->
+        <body name="goal_marker" mocap="true" pos="0.15 0 0.0005">
+            <geom type="cylinder" size="0.025 0.0005" material="goal_mat"
+                contype="0" conaffinity="0" group="2" />
+        </body>
 
         <!-- Cube 27×27×27 mm, masse 5 g (PLA) avec joint libre -->
         <!-- Inertie d'un cube plein : I = m*a²/6 = 0.005*(0.027²)/6 ≈ 6.075e-7 kg·m² -->

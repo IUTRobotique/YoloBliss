@@ -322,10 +322,12 @@ class Sim3Dofs:
 
     # ── Visualisation du but ─────────────────────────────────────
 
-    def set_goal_marker(self, pos: np.ndarray) -> None:
-        """Déplace la sphère du goal marker vers la position ``pos``."""
+    def set_goal_marker(self, pos: np.ndarray, quat: np.ndarray | None = None) -> None:
+        """Déplace le goal marker vers ``pos`` avec orientation ``quat``."""
         if self._goal_mocap_id >= 0:
             self.data.mocap_pos[self._goal_mocap_id] = pos
+            if quat is not None:
+                self.data.mocap_quat[self._goal_mocap_id] = quat
 
     def set_named_marker(self, body_name: str, pos: np.ndarray) -> None:
         """Déplace un marqueur mocap identifié par le nom de son body."""

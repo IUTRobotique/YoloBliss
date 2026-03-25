@@ -105,7 +105,7 @@ def make_eval_env(env_name: str, algo: str, render: bool):
         else:
             raise ValueError(f"HER non supporte pour l'env '{env_name}' (pas de goal)")
 
-    return env_cls(render_mode=render_mode)
+    return env_cls(render_mode=render_mode, training=False)
 
 
 def extract_distance(info: dict) -> float:

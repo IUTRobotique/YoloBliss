@@ -16,21 +16,21 @@ import torch
 import gymnasium as gym
 from gymnasium import spaces
 from stable_baselines3 import SAC
-from stable_baselines3.common.callbacks import BaseCallback, CallbackList, EvalCallback, StopTrainingOnRewardThreshold
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList, EvalCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.her.her_replay_buffer import HerReplayBuffer
 
 from robot_env.sorting_env import SortingEnv, SUCCESS_THRESHOLD
 
-TOTAL_TIMESTEPS: int = 1_000_000
+TOTAL_TIMESTEPS: int = 1_000_0000
 BUFFER_SIZE: int = 1_000_000
 LEARNING_STARTS: int = 1_000
 BATCH_SIZE: int = 256
 GAMMA: float = 0.99
 TAU: float = 0.005
 LEARNING_RATE: float = 3e-4
-GRADIENT_STEPS: int = 100
+GRADIENT_STEPS: int = 1
 
 EVAL_FREQ: int = 5_000
 N_EVAL_EPISODES: int = 10
@@ -47,10 +47,37 @@ POLICY_KWARGS: dict[str, object] = {
 MODEL_DIR: str = os.path.join(os.path.dirname(__file__), "models", "her_sac_sorting")
 LOG_DIR: str = os.path.join(os.path.dirname(__file__), "logs", "her_sac_sorting")
 
-#récompense moyenne par épisode au-delà de laquelle l'entraînement s'arrête
-#sorting : -dist×2 + 20*(cube) + 20*(cyl) + 50*(les deux) ; best observé ≈ -186 (en cours d'apprentissage)
-#0 indique que l'agent commence à résoudre la tâche de façon cohérente
-REWARD_THRESHOLD: float = 0.0
+SUCCESS_RATE_THRESHOLD: float = 0.98
+
+
+class _StopOnSuccessRate(BaseCallback):
+    """Arrete l'entrainement quand le taux de succes depasse un seuil."""
+
+    def __init__(self, threshold: float = 0.98, verbose: int = 1):
+        super().__init__(verbose)
+        self.threshold = threshold
+
+    def _on_step(self) -> bool:
+        if self.parent is None:
+            return True
+        log_path = self.parent.log_path
+        if log_path is None:
+            return True
+        eval_path = os.path.join(log_path, "evaluations.npz")
+        if not os.path.exists(eval_path):
+            return True
+        data = np.load(eval_path)
+        if "successes" not in data:
+            return True
+        last_successes = data["successes"][-1]
+        success_rate = float(np.mean(last_successes))
+        if self.verbose:
+            print(f"[EarlyStop] Success rate: {success_rate:.2%}")
+        if success_rate >= self.threshold:
+            if self.verbose:
+                print(f"[EarlyStop] Seuil atteint ({success_rate:.2%} >= {self.threshold:.2%}), arret.")
+            return False
+        return True
 
 
 class _RenderCallback(BaseCallback):
@@ -231,13 +258,10 @@ def train(
     n_params: int = sum(p.numel() for p in model.policy.parameters())
     print(f"Paramètres : {n_params:,}")
 
-    stop_callback = StopTrainingOnRewardThreshold(
-        reward_threshold=REWARD_THRESHOLD,
-        verbose=1,
-    )
+    stop_callback = _StopOnSuccessRate(threshold=SUCCESS_RATE_THRESHOLD, verbose=1)
     eval_callback = EvalCallback(
         eval_env,
-        callback_on_new_best=stop_callback,
+        callback_after_eval=stop_callback,
         best_model_save_path=model_dir,
         log_path=log_dir,
         eval_freq=EVAL_FREQ,

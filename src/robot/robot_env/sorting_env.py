@@ -11,9 +11,12 @@ from sim_3dofs import Sim3Dofs
 # Scene MuJoCo avec deux objets et deux zones cibles
 SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_sorting.xml")
 
-# Positions fixes des zones cibles (centres des disques au sol)
-GOAL_CUBE_POS = np.array([0.20, -0.06, 0.0])
-GOAL_CYLINDER_POS = np.array([0.20, 0.06, 0.0])
+# Tirage des goals en anneau autour du robot
+GOAL_DIST_MIN = 0.12
+GOAL_DIST_MAX = 0.20
+
+# Distance min entre deux positions (goals, objets)
+MIN_SEPARATION = 0.06
 
 # Tirage en anneau autour du robot
 OBJ_Z = 0.0135
@@ -38,10 +41,11 @@ class SortingEnv(gym.Env):
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 25}
 
-    def __init__(self, render_mode: str | None = None) -> None:
+    def __init__(self, render_mode: str | None = None, training: bool = True) -> None:
         super().__init__()
 
         self.render_mode = render_mode
+        self._training = training
 
         self.sim = Sim3Dofs(
             render_mode=render_mode,
@@ -66,9 +70,9 @@ class SortingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Positions des cibles
-        self._goal_cube = GOAL_CUBE_POS.copy()
-        self._goal_cylinder = GOAL_CYLINDER_POS.copy()
+        # Positions des cibles (randomisees a chaque reset)
+        self._goal_cube = np.zeros(3)
+        self._goal_cylinder = np.zeros(3)
 
         # Etat interne
         self._prev_action: np.ndarray = np.zeros(n_act)
@@ -79,16 +83,22 @@ class SortingEnv(gym.Env):
 
     # -- Helpers --
 
-    def _sample_obj_pos(self) -> np.ndarray:
+    def _sample_pos_in_ring(self, dist_min: float, dist_max: float, z: float = 0.0) -> np.ndarray:
         """Position aleatoire en anneau autour du robot."""
         angle = self.np_random.uniform(-np.pi, np.pi)
-        dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
-        return np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
+        dist = self.np_random.uniform(dist_min, dist_max)
+        return np.array([dist * np.cos(angle), dist * np.sin(angle), z])
+
+    def _sample_obj_pos(self) -> np.ndarray:
+        return self._sample_pos_in_ring(OBJ_DIST_MIN, OBJ_DIST_MAX, OBJ_Z)
+
+    def _sample_goal_pos(self) -> np.ndarray:
+        return self._sample_pos_in_ring(GOAL_DIST_MIN, GOAL_DIST_MAX, 0.0)
 
     def _get_obs(self) -> np.ndarray:
         """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
         qpos = self.sim.get_qpos() + self.np_random.normal(0, 0.005, size=(3,))
-        ee_pos = self.sim.get_end_effector_pos()
+        ee_pos = self.sim.get_end_effector_pos() + self.np_random.normal(0, 0.005, size=(3,))
         cube_pos = self.sim.get_cube_pos() + self.np_random.normal(0, 0.005, size=(3,))
         cyl_pos = self.sim.get_cylinder_pos() + self.np_random.normal(0, 0.005, size=(3,))
         
@@ -147,25 +157,32 @@ class SortingEnv(gym.Env):
         qpos_init = self.np_random.uniform(-0.1, 0.1, size=(3,))
         self.sim.reset(qpos=qpos_init)
 
-        # Curriculum : bootstrap avec positions facilitees proches des goals
-        if self._episode_count < 50:
-            # Cube proche de son goal, cylindre proche du sien
-            cube_pos = self._goal_cube.copy()
-            cube_pos[:2] += np.array([-0.06, 0.0])
-            cube_pos[2] = OBJ_Z
-            cylinder_pos = self._goal_cylinder.copy()
-            cylinder_pos[:2] += np.array([-0.06, 0.0])
-            cylinder_pos[2] = OBJ_Z
-        else:
-            cube_pos = self._sample_obj_pos()
-            cylinder_pos = self._sample_obj_pos()
-            # Verifier que les objets ne se chevauchent pas
-            for _ in range(50):
-                if np.linalg.norm(cube_pos[:2] - cylinder_pos[:2]) >= OBJ_DIST_MIN:
-                    break
-                cylinder_pos = self._sample_obj_pos()
+        # Goals aleatoires, assez eloignes l'un de l'autre
+        self._goal_cube = self._sample_goal_pos()
+        for _ in range(50):
+            self._goal_cylinder = self._sample_goal_pos()
+            if np.linalg.norm(self._goal_cube[:2] - self._goal_cylinder[:2]) >= MIN_SEPARATION:
+                break
 
-        self.sim.set_cube_pose(pos=cube_pos)
+        # Objets aleatoires, assez eloignes entre eux et des goals
+        def _far_enough(pos: np.ndarray, others: list[np.ndarray]) -> bool:
+            return all(np.linalg.norm(pos[:2] - o[:2]) >= MIN_SEPARATION for o in others)
+
+        cube_pos = self._sample_obj_pos()
+        for _ in range(50):
+            if _far_enough(cube_pos, [self._goal_cube, self._goal_cylinder]):
+                break
+            cube_pos = self._sample_obj_pos()
+
+        cylinder_pos = self._sample_obj_pos()
+        for _ in range(50):
+            if _far_enough(cylinder_pos, [self._goal_cube, self._goal_cylinder, cube_pos]):
+                break
+            cylinder_pos = self._sample_obj_pos()
+
+        yaw = self.np_random.uniform(-np.pi, np.pi)
+        cube_quat = np.array([np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)])
+        self.sim.set_cube_pose(pos=cube_pos, quat=cube_quat)
         self.sim.set_cylinder_pose(pos=cylinder_pos)
         self.sim.forward()
 

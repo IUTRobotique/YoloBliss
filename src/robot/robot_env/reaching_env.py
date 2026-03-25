@@ -34,7 +34,7 @@ class ReachingEnv(gym.Env):
     
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 25}
 
-    def __init__(self, render_mode: str | None = None) -> None:
+    def __init__(self, render_mode: str | None = None, training: bool = True) -> None:
         super().__init__()
 
         self.render_mode = render_mode
@@ -82,7 +82,7 @@ class ReachingEnv(gym.Env):
     def _get_obs(self) -> np.ndarray:
         """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
         qpos = self.sim.get_qpos() + self.np_random.normal(0, 0.005, size=(3,))
-        ee_pos = self.sim.get_end_effector_pos()
+        ee_pos = self.sim.get_end_effector_pos() + self.np_random.normal(0, 0.005, size=(3,))
         goal_diff = self._goal - ee_pos
         return np.concatenate([qpos, ee_pos, goal_diff]).astype(np.float32)
 

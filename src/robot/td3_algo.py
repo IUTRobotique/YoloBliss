@@ -32,9 +32,9 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.noise import NormalActionNoise
 from stable_baselines3.common.vec_env import VecEnv
 
-from reaching_env import ReachingEnv
+from robot_env.push_in_hole_env import PushInHoleEnv
 
-TOTAL_TIMESTEPS: int = 500_000
+TOTAL_TIMESTEPS: int = 300_000
 BUFFER_SIZE: int = 1_000_000
 LEARNING_STARTS: int = 10_000
 BATCH_SIZE: int = 256
@@ -74,15 +74,15 @@ class _RenderCallback(BaseCallback):
         return True
 
 
-def make_env(render_mode: str | None =None) -> ReachingEnv:
-    """Crée une instance de ReachingEnv (factory pour make_vec_env).
+def make_env(render_mode: str | None =None) -> PushInHoleEnv:
+    """Crée une instance de PushInHoleEnv (factory pour make_vec_env).
     Parameters:
         render_mode (str | None): ``"human"`` pour afficher MuJoCo en temps réel,
             ``None`` pour l'entraînement headless (plus rapide).
     Returns:
-        ReachingEnv: environnement gymnasium initialisé.
+        PushInHoleEnv: environnement gymnasium initialisé.
     """
-    return ReachingEnv(render_mode=render_mode)
+    return PushInHoleEnv(render_mode=render_mode)
 
 
 def train(
@@ -91,7 +91,7 @@ def train(
     log_dir: str =LOG_DIR,
     render: bool =False,
 ) -> TD3:
-    """Entraîne un agent TD3 sur la tâche de reaching.
+    """Entraîne un agent TD3 sur la tâche de push dans le trou.
 
     TD3 est plus stable que DDPG mais sa courbe d'apprentissage est plus
     erratique que SAC : la qualité de la convergence dépend fortement du
@@ -109,7 +109,7 @@ def train(
     os.makedirs(log_dir, exist_ok=True)
 
     render_mode: str | None = "human" if render else None
-    env: ReachingEnv = make_env(render_mode=render_mode)
+    env: PushInHoleEnv = make_env(render_mode=render_mode)
     eval_env: VecEnv = make_vec_env(make_env, n_envs=1)
 
     #bruit gaussien indépendant par dimension d'action pour l'exploration

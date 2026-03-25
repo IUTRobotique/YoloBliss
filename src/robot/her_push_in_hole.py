@@ -22,7 +22,8 @@ from robot_env.push_in_hole_env import (
     _yaw_error_4fold,
 )
 
-TOTAL_TIMESTEPS: int = 300_000
+TOTAL_TIMESTEPS: int = 10_000_000
+SUCCESS_RATE_THRESHOLD: float = 0.98
 BUFFER_SIZE: int = 1_000_000
 LEARNING_STARTS: int = 5_000
 BATCH_SIZE: int = 256
@@ -40,6 +41,36 @@ POLICY_KWARGS: dict[str, object] = {
 
 MODEL_DIR: str = os.path.join(os.path.dirname(__file__), "models", "her_sac")
 LOG_DIR: str = os.path.join(os.path.dirname(__file__), "logs", "her_sac")
+
+
+class _StopOnSuccessRate(BaseCallback):
+    """Arrete l'entrainement quand le taux de succes depasse un seuil."""
+
+    def __init__(self, threshold: float = 0.98, verbose: int = 1):
+        super().__init__(verbose)
+        self.threshold = threshold
+
+    def _on_step(self) -> bool:
+        if self.parent is None:
+            return True
+        log_path = self.parent.log_path
+        if log_path is None:
+            return True
+        eval_path = os.path.join(log_path, "evaluations.npz")
+        if not os.path.exists(eval_path):
+            return True
+        data = np.load(eval_path)
+        if "successes" not in data:
+            return True
+        last_successes = data["successes"][-1]
+        success_rate = float(np.mean(last_successes))
+        if self.verbose:
+            print(f"[EarlyStop] Success rate: {success_rate:.2%}")
+        if success_rate >= self.threshold:
+            if self.verbose:
+                print(f"[EarlyStop] Seuil atteint ({success_rate:.2%} >= {self.threshold:.2%}), arret.")
+            return False
+        return True
 
 
 class _RenderCallback(BaseCallback):
@@ -201,8 +232,10 @@ def train(
 
     model = make_her_sac(env, log_dir=log_dir)
 
+    stop_callback = _StopOnSuccessRate(threshold=SUCCESS_RATE_THRESHOLD, verbose=1)
     eval_callback = EvalCallback(
         eval_env,
+        callback_after_eval=stop_callback,
         best_model_save_path=model_dir,
         log_path=log_dir,
         eval_freq=5_000,
@@ -214,7 +247,10 @@ def train(
     if render:
         callbacks.append(_RenderCallback())
 
-    model.learn(total_timesteps=total_timesteps, callback=CallbackList(callbacks))
+    try:
+        model.learn(total_timesteps=total_timesteps, callback=CallbackList(callbacks))
+    except KeyboardInterrupt:
+        print("\nEntrainement interrompu par l'utilisateur")
     model.save(os.path.join(model_dir, "her_sac_final"))
 
     env.close()

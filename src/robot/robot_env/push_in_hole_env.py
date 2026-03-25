@@ -18,8 +18,9 @@ from sim_3dofs import Sim3Dofs
 # Scene MuJoCo avec sol plat + marqueur carre
 SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_push_in_hole.xml")
 
-# Position fixe du marqueur (centre)
-MARKER_POS = np.array([0.15, 0.0, 0.0])
+# Tirage du marqueur en anneau autour du robot
+MARKER_DIST_MIN = 0.12
+MARKER_DIST_MAX = 0.20
 
 # Tirage en anneau autour du robot
 OBJ_Z = 0.0135    # demi-cote du cube, pose sur le sol
@@ -43,28 +44,25 @@ ACTION_RATE_COEFF = 0.01
 STEP_TIME_PENALTY = 0.05
 
 
-def _yaw_error_4fold(cos_yaw: float, sin_yaw: float) -> float:
-    """Erreur d'orientation minimale en tenant compte de la symetrie 4-fold.
+def _yaw_error_4fold(cube_yaw: float, marker_yaw: float) -> float:
+    """Erreur d'orientation minimale entre le cube et le marqueur (symetrie 4-fold).
 
-    Un carre est identique a 0, 90, 180, 270 deg. On calcule l'erreur
-    angulaire par rapport a chacune de ces orientations et on garde la plus
-    petite. Retourne une valeur dans [0, pi/4] (max 45 deg).
+    Un carre est identique a 0, 90, 180, 270 deg. On calcule la difference
+    de yaw relative, puis on la ramene dans [0, pi/4].
     """
-    yaw = np.arctan2(sin_yaw, cos_yaw)
-    # Ramener dans [0, pi/2) grace a la symetrie 4-fold
-    yaw_mod = yaw % (np.pi / 2)
-    # Erreur = distance au multiple de 90 deg le plus proche
-    return min(yaw_mod, np.pi / 2 - yaw_mod)
+    diff = (cube_yaw - marker_yaw) % (np.pi / 2)
+    return min(diff, np.pi / 2 - diff)
 
 
 class PushInHoleEnv(gym.Env):
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 25}
 
-    def __init__(self, render_mode: str | None = None) -> None:
+    def __init__(self, render_mode: str | None = None, training: bool = True) -> None:
         super().__init__()
 
         self.render_mode = render_mode
+        self._training = training
 
         self.sim = Sim3Dofs(
             render_mode=render_mode,
@@ -90,13 +88,20 @@ class PushInHoleEnv(gym.Env):
         )
 
         # Etat interne
-        self._marker_pos: np.ndarray = MARKER_POS.copy()
+        self._marker_pos: np.ndarray = np.zeros(3)
+        self._marker_yaw: float = 0.0
         self._initial_cube_pos: np.ndarray = np.array([0.0, 0.0, OBJ_Z], dtype=float)
         self._prev_action: np.ndarray = np.zeros(n_act)
         self._step_count: int = 0
         self._episode_count: int = 0
 
     # -- Helpers --
+
+    def _sample_marker_pos(self) -> np.ndarray:
+        """Position aleatoire du marqueur en anneau autour du robot."""
+        angle = self.np_random.uniform(-np.pi, np.pi)
+        dist = self.np_random.uniform(MARKER_DIST_MIN, MARKER_DIST_MAX)
+        return np.array([dist * np.cos(angle), dist * np.sin(angle), 0.0])
 
     def _sample_cube_pos(self) -> np.ndarray:
         """Position aleatoire en anneau autour du robot, assez loin du marqueur."""
@@ -113,29 +118,35 @@ class PushInHoleEnv(gym.Env):
     def _get_obs(self) -> np.ndarray:
         """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
         qpos = self.sim.get_qpos()
-        ee_pos = self.sim.get_end_effector_pos()
+        ee_pos = self.sim.get_end_effector_pos() + self.np_random.normal(0, 0.005, size=(3,))
         cube_pos = self.sim.get_cube_pos()
-        cube_yaw = self.sim.get_cube_yaw_cossin()
+        cube_cos, cube_sin = self.sim.get_cube_yaw_cossin()
+        cube_yaw = np.arctan2(cube_sin, cube_cos)
 
         # Bruit sim-to-real
         qpos += self.np_random.normal(0, 0.005, size=qpos.shape)
         cube_pos += self.np_random.normal(0, 0.005, size=cube_pos.shape)
-        cube_yaw += self.np_random.normal(0, 0.01, size=cube_yaw.shape)
+        cube_yaw += self.np_random.normal(0, 0.01)
+
+        # Yaw relatif cube - marqueur (ce que l'agent doit corriger)
+        rel_yaw = cube_yaw - self._marker_yaw
+        rel_cossin = np.array([np.cos(rel_yaw), np.sin(rel_yaw)])
 
         cube_to_marker = self._marker_pos - cube_pos
         return np.concatenate([
-            qpos, ee_pos, cube_pos, cube_to_marker, cube_yaw,
+            qpos, ee_pos, cube_pos, cube_to_marker, rel_cossin,
         ]).astype(np.float32)
 
     def _compute_reward(self, action: np.ndarray) -> tuple[float, bool]:
         """Recompense dense : position + orientation vers le marqueur."""
         ee_pos = self.sim.get_end_effector_pos()
         cube_pos = self.sim.get_cube_pos()
-        cube_yaw = self.sim.get_cube_yaw_cossin()
+        cube_cos, cube_sin = self.sim.get_cube_yaw_cossin()
+        cube_yaw = np.arctan2(cube_sin, cube_cos)
 
         dist_ee_cube = float(np.linalg.norm(ee_pos - cube_pos))
         dist_cube_marker_xy = float(np.linalg.norm(cube_pos[:2] - self._marker_pos[:2]))
-        yaw_error = _yaw_error_4fold(cube_yaw[0], cube_yaw[1])
+        yaw_error = _yaw_error_4fold(cube_yaw, self._marker_yaw)
 
         # Approche : guider l'effecteur vers le cube
         reward = -2.0 * dist_ee_cube
@@ -170,15 +181,21 @@ class PushInHoleEnv(gym.Env):
         qpos_init = self.np_random.uniform(-0.1, 0.1, size=(3,))
         self.sim.reset(qpos=qpos_init)
 
-        # Bootstrap : les 50 premiers episodes, cube proche du marqueur
-        if self._episode_count < 50:
-            cube_pos = np.array([0.10, 0.05, OBJ_Z])
-        else:
-            cube_pos = self._sample_cube_pos()
+        # Position et orientation aleatoires du marqueur
+        self._marker_pos = self._sample_marker_pos()
+        self._marker_yaw = float(self.np_random.uniform(-np.pi, np.pi))
 
-        self.sim.set_cube_pose(pos=cube_pos)
+        cube_pos = self._sample_cube_pos()
+
+        # Orientation aleatoire du cube (yaw)
+        cube_yaw = self.np_random.uniform(-np.pi, np.pi)
+        cube_quat = np.array([np.cos(cube_yaw / 2), 0.0, 0.0, np.sin(cube_yaw / 2)])
+        self.sim.set_cube_pose(pos=cube_pos, quat=cube_quat)
         self.sim.forward()
-        self.sim.set_goal_marker(self._marker_pos)
+        marker_quat = np.array([
+            np.cos(self._marker_yaw / 2), 0.0, 0.0, np.sin(self._marker_yaw / 2)
+        ])
+        self.sim.set_goal_marker(self._marker_pos, quat=marker_quat)
 
         self._initial_cube_pos = cube_pos.copy()
         self._prev_action = np.zeros(self.sim.n_actuators)
@@ -205,8 +222,9 @@ class PushInHoleEnv(gym.Env):
         truncated = self._step_count >= MAX_EPISODE_STEPS
 
         cube_pos = self.sim.get_cube_pos()
-        cube_yaw = self.sim.get_cube_yaw_cossin()
-        yaw_error = _yaw_error_4fold(cube_yaw[0], cube_yaw[1])
+        cube_cos, cube_sin = self.sim.get_cube_yaw_cossin()
+        cube_yaw = np.arctan2(cube_sin, cube_cos)
+        yaw_error = _yaw_error_4fold(cube_yaw, self._marker_yaw)
         info = {
             "is_success": is_success,
             "dist_cube_marker": float(np.linalg.norm(cube_pos[:2] - self._marker_pos[:2])),

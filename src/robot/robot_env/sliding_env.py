@@ -86,7 +86,7 @@ class SlidingEnv(gym.Env):
     def _get_obs(self) -> np.ndarray:
         """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
         qpos = self.sim.get_qpos()
-        ee_pos = self.sim.get_end_effector_pos()
+        ee_pos = self.sim.get_end_effector_pos() + self.np_random.normal(0, 0.005, size=(3,))
         cube_pos = self.sim.get_cube_pos()
 
         qpos = qpos + self.np_random.normal(0, 0.005, size=qpos.shape)

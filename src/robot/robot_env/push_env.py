@@ -8,7 +8,7 @@ from gymnasium import spaces
 
 from sim_3dofs import Sim3Dofs
 
-# MuJoCo scene dedicated to push (robot + cube)
+# MuJoCo scene dedicated to push (robot + cube + goal marker)
 SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_push.xml")
 
 # Tirage en anneau autour du robot
@@ -16,33 +16,41 @@ OBJ_Z = 0.0135
 OBJ_DIST_MIN = 0.12   # pas trop pres de la base (m)
 OBJ_DIST_MAX = 0.20   # portee max du robot (m)
 
-# Success threshold: cube moved at least this far from its spawn (m)
-SUCCESS_DIST = 0.2
+# Distance min entre le cube et le goal au spawn
+MIN_CUBE_GOAL_DIST = 0.05
 
-# Maximum episode length
-MAX_EPISODE_STEPS = 100
+# Seuil de succes : bord du cube touche le bord du goal
+# goal_radius (0.025) + cube_half_side (0.0135) = 0.0385
+SUCCESS_THRESHOLD = 0.0385
+
+# Duree max d'un episode
+MAX_EPISODE_STEPS = 200
+
+# Penalite temporelle par step
+STEP_TIME_PENALTY = 0.05
+
+# Coefficient de penalite pour le lissage des actions
+ACTION_RATE_COEFF = 0.01
 
 
 class PushEnv(gym.Env):
-    """Gymnasium env: the end effector must reach the cube and push it"""
+    """Env Gymnasium : pousser le cube vers un goal au sol."""
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 25}
 
-    def __init__(self, render_mode: str | None = None) -> None:
+    def __init__(self, render_mode: str | None = None, training: bool = True) -> None:
         super().__init__()
 
         self.render_mode = render_mode
+        self._training = training
 
-        # MuJoCo simulation
         self.sim = Sim3Dofs(
             render_mode=render_mode,
             scene_xml=SCENE_XML,
         )
 
-        # Spaces
         n_act = self.sim.n_actuators  # 3
 
-        # Actions: target joint positions in radians
         act_limit = 2.618
         self.action_space = spaces.Box(
             low=-act_limit,
@@ -51,102 +59,117 @@ class PushEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Observations: qpos(3) + ee(3) + cube(3) = 9
-        obs_high = np.full(9, np.inf, dtype=np.float32)
+        # Observations : qpos(3) + ee(3) + cube(3) + cube_to_goal(3) = 12
+        obs_high = np.full(12, np.inf, dtype=np.float32)
         self.observation_space = spaces.Box(
             low=-obs_high,
             high=obs_high,
             dtype=np.float32,
         )
 
-        # Internal state
-        self._cube_init: np.ndarray = np.zeros(3)
+        # Etat interne
+        self._goal: np.ndarray = np.zeros(3)
         self._prev_action: np.ndarray = np.zeros(n_act)
         self._step_count: int = 0
+        self._episode_count: int = 0
 
-    # Helpers
+    # -- Helpers --
 
-    def _sample_obj_pos(self) -> np.ndarray:
-        """Position aleatoire en anneau autour du robot avec."""
+    def _sample_pos(self) -> np.ndarray:
+        """Position aleatoire en anneau autour du robot."""
         angle = self.np_random.uniform(-np.pi, np.pi)
         dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
-        pos = np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
-        
-        return pos
+        return np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
+
+    def _sample_cube_and_goal(self) -> tuple[np.ndarray, np.ndarray]:
+        """Tire cube et goal assez eloignes l'un de l'autre."""
+        goal = self._sample_pos()
+        for _ in range(100):
+            cube = self._sample_pos()
+            if np.linalg.norm(cube[:2] - goal[:2]) > MIN_CUBE_GOAL_DIST:
+                return cube, goal
+        return np.array([0.10, 0.08, OBJ_Z]), goal
 
     def _get_obs(self) -> np.ndarray:
-        """Build the observation vector with sim-to-real noise."""
+        """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
         qpos = self.sim.get_qpos() + self.np_random.normal(0, 0.005, size=(3,))
-        ee_pos = self.sim.get_end_effector_pos()
+        ee_pos = self.sim.get_end_effector_pos() + self.np_random.normal(0, 0.005, size=(3,))
         cube_pos = self.sim.get_cube_pos() + self.np_random.normal(0, 0.005, size=(3,))
+        cube_to_goal = self._goal - cube_pos
         return np.concatenate([
-            qpos, ee_pos, cube_pos,
+            qpos, ee_pos, cube_pos, cube_to_goal,
         ]).astype(np.float32)
 
     def _compute_reward(self, action: np.ndarray) -> tuple[float, bool]:
-        """Reward: approach the cube + reward displacement from spawn."""
+        """Reward : approche + push vers le goal."""
         ee_pos = self.sim.get_end_effector_pos()
         cube_pos = self.sim.get_cube_pos()
 
         dist_ee_cube = float(np.linalg.norm(ee_pos - cube_pos))
-        cube_displacement = float(np.linalg.norm(cube_pos - self._cube_init))
+        dist_cube_goal_xy = float(np.linalg.norm(cube_pos[:2] - self._goal[:2]))
 
-        # Approach the cube
-        reward = -dist_ee_cube
+        # Approche
+        reward = -2.0 * dist_ee_cube
 
-        # Reward any cube movement from its initial position
-        reward += 3.0 * cube_displacement
+        # Pousser le cube vers le goal
+        reward -= 5.0 * dist_cube_goal_xy
 
-        # Success: cube moved far enough
-        is_success = cube_displacement > SUCCESS_DIST
+        # Pression temporelle
+        reward -= STEP_TIME_PENALTY
+
+        # Succes
+        is_success = dist_cube_goal_xy < SUCCESS_THRESHOLD
         if is_success:
-            reward += 30.0
+            reward += 150.0
 
-        # Smoothing penalty
+        # Lissage des commandes
         action_rate = float(np.sum((action - self._prev_action) ** 2))
-        reward -= 0.01 * action_rate
+        reward -= ACTION_RATE_COEFF * action_rate
 
         return reward, is_success
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
 
-        # Reset simulation avec pose initiale aleatoire (sim-to-real)
+        # Pose initiale aleatoire (sim-to-real)
         qpos_init = self.np_random.uniform(-0.1, 0.1, size=(3,))
         self.sim.reset(qpos=qpos_init)
 
-        # Sample cube on the ground
-        self._cube_init = self._sample_obj_pos()
-        self.sim.set_cube_pose(pos=self._cube_init.copy())
+        cube_pos, self._goal = self._sample_cube_and_goal()
+
+        yaw = self.np_random.uniform(-np.pi, np.pi)
+        cube_quat = np.array([np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)])
+        self.sim.set_cube_pose(pos=cube_pos, quat=cube_quat)
+        self.sim.forward()
+        self.sim.set_goal_marker(self._goal)
 
         self._prev_action = np.zeros(self.sim.n_actuators)
         self._step_count = 0
+        self._episode_count += 1
 
-        obs = self._get_obs()
-        info = {"cube_init": self._cube_init.copy()}
-        return obs, info
+        info = {
+            "cube_pos": cube_pos.copy(),
+            "goal_pos": self._goal.copy(),
+        }
+        return self._get_obs(), info
 
     def step(self, action: np.ndarray):
         action = np.asarray(action, dtype=np.float32)
 
-        # Apply the action in simulation
         self.sim.step(action)
         self._step_count += 1
 
-        # Observation
         obs = self._get_obs()
-
-        # Reward
         reward, is_success = self._compute_reward(action)
 
-        # Termination
         terminated = is_success
         truncated = self._step_count >= MAX_EPISODE_STEPS
 
         cube_pos = self.sim.get_cube_pos()
         info = {
             "is_success": is_success,
-            "cube_displacement": float(np.linalg.norm(cube_pos - self._cube_init)),
+            "dist_cube_goal": float(np.linalg.norm(cube_pos[:2] - self._goal[:2])),
+            "goal_pos": self._goal.copy(),
         }
 
         self._prev_action = action.copy()
