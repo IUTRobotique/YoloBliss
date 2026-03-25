@@ -22,6 +22,12 @@ SUCCESS_THRESHOLD = 0.02  # 2 cm
 # Durée max d'un épisode
 MAX_EPISODE_STEPS = 100
 
+# Penalite temporelle par step
+STEP_TIME_PENALTY = 0.05
+
+# Coefficient de penalite pour le lissage des actions
+ACTION_RATE_COEFF = 0.01
+
 
 class ReachingEnv(gym.Env):
     """Env Gymnasium : Reaching dans une position cible."""
@@ -88,14 +94,17 @@ class ReachingEnv(gym.Env):
         # Reward dense : opposé de la distance
         reward = -distance
 
+        # Pression temporelle : force l'agent a aller droit au but
+        reward -= STEP_TIME_PENALTY
+
         # Bonus de succès
         is_success = distance < SUCCESS_THRESHOLD
         if is_success:
-            reward += 1.0
+            reward += 10.0
 
-        # Pénalité de lissage (mouvements brusques)
+        # Lissage des commandes
         action_rate = float(np.sum((action - self._prev_action) ** 2))
-        reward -= 0.01 * action_rate
+        reward -= ACTION_RATE_COEFF * action_rate
 
         return reward, is_success
 
