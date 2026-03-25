@@ -1,3 +1,13 @@
+"""Test des modeles entraines sur tous les environnements.
+
+Usage :
+    python main.py --env reaching --algo sac
+    python main.py --env push --algo sac --render
+    python main.py --env sliding --algo sac
+    python main.py --env push_in_hole --algo her
+    python main.py --env sorting --algo her
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -14,6 +24,7 @@ from robot_env.push_env import PushEnv
 from robot_env.sliding_env import SlidingEnv
 from robot_env.push_in_hole_env import PushInHoleEnv
 from robot_env.sorting_env import SortingEnv
+import sim_to_real
 
 # -- Environnements disponibles --
 ENVS = {
@@ -32,6 +43,7 @@ ALGO_CLS = {
     "crossq": SAC,
     "her": SAC,
 }
+
 
 # -- Mapping (env, algo) -> dossier de modeles --
 # Convention : models/{algo}_{env}/ ou models/{algo}/ pour les anciens
@@ -136,6 +148,7 @@ if __name__ == "__main__":
         done = False
         total_reward = 0.0
 
+        sim_to_real.init_real_robot()
         while not done:
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
@@ -155,7 +168,7 @@ if __name__ == "__main__":
         dist_value = extract_distance(info)
         distances.append(dist_value)
 
-        print(f"Ep {ep+1:3d}: reward={total_reward:7.2f}  "
+        print(f"Ep {ep + 1:3d}: reward={total_reward:7.2f}  "
               f"success={info.get('is_success', False)}  dist={dist_value:.4f}")
 
     if args.real:
@@ -164,5 +177,5 @@ if __name__ == "__main__":
 
     print(f"\n--- {args.env} | {args.algo} | {args.episodes} episodes ---")
     print(f"Reward : {np.mean(rewards):.2f} +/- {np.std(rewards):.2f}")
-    print(f"Succes : {np.mean(successes)*100:.1f}%")
+    print(f"Succes : {np.mean(successes) * 100:.1f}%")
     print(f"Dist   : {np.mean(distances):.4f} +/- {np.std(distances):.4f}")
