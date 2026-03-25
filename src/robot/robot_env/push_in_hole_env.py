@@ -35,7 +35,7 @@ CURRICULUM_EPISODES = 800  # FIX: accelerer la progression du curriculum
 SUCCESS_Z_THRESHOLD = -0.01
 
 # Duree max d'un episode
-MAX_EPISODE_STEPS = 400
+MAX_EPISODE_STEPS = 1000
 
 # Coefficient de penalite pour le lissage des actions
 ACTION_RATE_COEFF = 0.01

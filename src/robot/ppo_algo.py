@@ -27,7 +27,7 @@ from robot_env.push_in_hole_env import PushInHoleEnv as PushEnv
 
 #collecte on-policy sur plusieurs envs en parallèle pour diversifier les données
 N_ENVS: int = 16
-TOTAL_TIMESTEPS: int = 100_000_000
+TOTAL_TIMESTEPS: int = 300_000
 
 #rollout de N_STEPS par env avant chaque update : N_STEPS * N_ENVS transitions consommées
 N_STEPS: int = 2048
@@ -142,6 +142,7 @@ def train(
     eval_env: VecEnv = make_vec_env(
         make_env,
         n_envs=1,
+        env_kwargs={"render_mode": None},
         monitor_kwargs={"info_keywords": ("is_success", "cube_displacement")}
     )
     model: PPO = PPO(

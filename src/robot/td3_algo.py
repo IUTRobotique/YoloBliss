@@ -33,8 +33,10 @@ from stable_baselines3.common.noise import NormalActionNoise
 from stable_baselines3.common.vec_env import VecEnv
 
 from robot_env.push_in_hole_env import PushInHoleEnv as ReachingEnv
+from stable_baselines3.common.monitor import Monitor
 
-TOTAL_TIMESTEPS: int = 100_000_000
+
+TOTAL_TIMESTEPS: int = 300_000
 BUFFER_SIZE: int = 1_000_000
 LEARNING_STARTS: int = 10_000
 BATCH_SIZE: int = 256
@@ -109,7 +111,9 @@ def train(
     os.makedirs(log_dir, exist_ok=True)
 
     render_mode: str | None = "human" if render else None
-    env: ReachingEnv = make_env(render_mode=render_mode)
+
+    env = Monitor(make_env(render_mode=render_mode),
+                info_keywords=("is_success", "cube_displacement"))
     eval_env: VecEnv = make_vec_env(make_env, n_envs=1)
 
     #bruit gaussien indépendant par dimension d'action pour l'exploration

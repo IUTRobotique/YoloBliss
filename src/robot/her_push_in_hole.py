@@ -88,20 +88,18 @@ class PushInHoleGoalEnv(gym.Env):
         desired_goal: np.ndarray,
         info: dict[str, Any],
     ) -> np.ndarray:
-        """Récompense relabellisable. Doit être cohérente avec step().
-        
-        FIX: utilise uniquement des termes relabellisables (pas d'approche ee→cube).
-        FIX: poids -5.0 sur dist_xy pour un signal de guidance fort.
-        FIX: bonus succès +10 cohérent avec l'échelle des récompenses.
+        """Récompense relabellisable. Dépend UNIQUEMENT de achieved_goal et desired_goal.
+
+        Tout accès à self._inner.sim.* est interdit ici : lors du relabelling HER,
+        compute_reward est appelé hors contexte de step(), l'état de la simulation
+        ne correspond plus à la transition relabellisée.
         """
         dist_xy = np.linalg.norm(
             achieved_goal[..., :2] - desired_goal[..., :2], axis=-1
         ).astype(np.float32)
-        ee_pos = self._inner.sim.get_end_effector_pos()  # FIX: read current end-effector position for sparse approach shaping
-        dist_ee_cube = np.linalg.norm(ee_pos - achieved_goal, axis=-1)  # FIX: estimate end-effector to cube proximity from achieved_goal
-        reward = -5.0 * dist_xy                                                  # FIX: -1.0 → -5.0
-        reward -= 1.0 * np.maximum(0.0, dist_ee_cube - 0.05).astype(np.float32)  # FIX: incentivize touching the cube without breaking HER consistency
-        reward += 100.0 * (achieved_goal[..., 2] < SUCCESS_Z_THRESHOLD).astype(np.float32)  # FIX: augmenter fortement le bonus de succes
+
+        reward = -5.0 * dist_xy
+        reward += 100.0 * (achieved_goal[..., 2] < SUCCESS_Z_THRESHOLD).astype(np.float32)
         return reward
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
