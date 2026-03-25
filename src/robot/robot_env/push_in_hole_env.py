@@ -29,7 +29,7 @@ MIN_CUBE_HOLE_DIST = 0.1
 # AUGMENTÉ pour permettre une phase d'apprentissage plus longue avant augmentation de difficulté
 CURRICULUM_MIN_DIST_START = 0.02
 CURRICULUM_MIN_DIST_END = MIN_CUBE_HOLE_DIST
-CURRICULUM_EPISODES = 2000
+CURRICULUM_EPISODES = 800  # FIX: accelerer la progression du curriculum
 
 # Seuil de succes : le cube est tombe dans le trou si son z < ce seuil
 SUCCESS_Z_THRESHOLD = -0.01
@@ -41,7 +41,7 @@ MAX_EPISODE_STEPS = 400
 ACTION_RATE_COEFF = 0.01
 
 # Penalite temporelle par step pour favoriser des episodes courts
-STEP_TIME_PENALTY = 0.05
+STEP_TIME_PENALTY = 0.01  # FIX: reduire la pression temporelle par step
 
 # Seuil de saturation de l'approche effecteur -> cube (m)
 APPROACH_SATURATION_DIST = 0.03
@@ -113,20 +113,17 @@ class PushInHoleEnv(gym.Env):
         # Fallback : position par defaut loin du trou et de la base
         return np.array([OBJ_DIST_MIN * np.cos(0), OBJ_DIST_MIN * np.sin(0), OBJ_Z])
 
+    # Dans _get_obs() — retirer ee_to_cube pour rester à dim 12
     def _get_obs(self) -> np.ndarray:
-        """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
         qpos = self.sim.get_qpos()
         ee_pos = self.sim.get_end_effector_pos()
         cube_pos = self.sim.get_cube_pos()
-
-        # Simule l'imprecision des moteurs et de la camera.
         qpos += self.np_random.normal(0, 0.005, size=qpos.shape)
         cube_pos += self.np_random.normal(0, 0.002, size=cube_pos.shape)
-
         cube_to_hole = self._hole_pos - cube_pos
-        return np.concatenate([
-            qpos, ee_pos, cube_pos, cube_to_hole,
-        ]).astype(np.float32)
+        return np.concatenate([qpos, ee_pos, cube_pos, cube_to_hole]).astype(np.float32)  # dim 12
+
+    
 
     def _compute_reward(self, action: np.ndarray) -> tuple[float, bool]:
         """Récompense dense linéaire et simplifié, relabellisable par HER.
@@ -175,7 +172,7 @@ class PushInHoleEnv(gym.Env):
             cube_pos = np.array([0.10, 0.05, OBJ_Z])
         else:
             # Sampling aléatoire standard après bootstrap
-            cube_pos = self._sample_cube_pos()
+            cube_pos = self._sample_obj_pos()
 
         self.sim.set_cube_pose(pos=cube_pos)
         self.sim.forward()
@@ -215,7 +212,7 @@ class PushInHoleEnv(gym.Env):
         cube_pos = self.sim.get_cube_pos()
         displacement = float(np.linalg.norm(cube_pos - self._initial_cube_pos))
         info = {
-            "is_success": is_success,
+            "is_success": bool(is_success),
             "dist_cube_hole": float(np.linalg.norm(cube_pos[:2] - self._hole_pos[:2])),
             "cube_displacement": displacement,
             "cube_z": float(cube_pos[2]),

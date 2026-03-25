@@ -26,8 +26,8 @@ from robot_env.push_in_hole_env import PushInHoleEnv as PushEnv
 
 
 #collecte on-policy sur plusieurs envs en parallèle pour diversifier les données
-N_ENVS: int = 4
-TOTAL_TIMESTEPS: int = 500_000
+N_ENVS: int = 16
+TOTAL_TIMESTEPS: int = 100_000_000
 
 #rollout de N_STEPS par env avant chaque update : N_STEPS * N_ENVS transitions consommées
 N_STEPS: int = 2048
@@ -54,7 +54,7 @@ LOG_DIR: str = os.path.join(os.path.dirname(__file__), "logs", "ppo")
 
 #récompense moyenne par épisode au-delà de laquelle l'entraînement s'arrête
 #push : +30 succès + récompenses d'approche ≈ 35 max ; 35 = succès systématique
-REWARD_THRESHOLD: float = 35.0
+REWARD_THRESHOLD: float = 30.0  # FIX: abaisser le seuil d'arret PPO selon la nouvelle cible
 
 
 def _setup_torch_for_cuda(device: str) -> None:

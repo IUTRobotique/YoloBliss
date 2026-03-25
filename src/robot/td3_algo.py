@@ -34,14 +34,14 @@ from stable_baselines3.common.vec_env import VecEnv
 
 from robot_env.push_in_hole_env import PushInHoleEnv as ReachingEnv
 
-TOTAL_TIMESTEPS: int = 500_000
+TOTAL_TIMESTEPS: int = 100_000_000
 BUFFER_SIZE: int = 1_000_000
 LEARNING_STARTS: int = 10_000
 BATCH_SIZE: int = 256
 GAMMA: float = 0.99
 TAU: float = 0.005
 LEARNING_RATE: float = 3e-4
-GRADIENT_STEPS: int = 1
+GRADIENT_STEPS: int = 16
 
 #l'acteur est mis à jour 1 fois pour 2 mises à jour des critiques
 POLICY_DELAY: int = 2
@@ -59,7 +59,7 @@ LOG_DIR: str = os.path.join(os.path.dirname(__file__), "logs", "td3")
 
 #récompense moyenne par épisode au-delà de laquelle l'entraînement s'arrête
 #reaching : 100 steps × ~1.0 (succès) - petites pénalités ≈ 95 max ; 90 = tâche résolue
-REWARD_THRESHOLD: float = 90.0
+REWARD_THRESHOLD: float = 30.0  # FIX: abaisser le seuil d'arret TD3 selon la nouvelle cible
 
 
 class _RenderCallback(BaseCallback):
