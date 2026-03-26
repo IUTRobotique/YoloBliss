@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import threading
 import time
 from pathlib import Path
 
+import cv2
 from sympy.codegen.ast import none
 
 import sim_to_real
@@ -47,6 +49,9 @@ ALGO_CLS = {
     "her": SAC,
 }
 
+_cube_pos_lock = threading.Lock()
+_latest_cube_pos = None
+_stop_detection = threading.Event()
 
 # -- Mapping (env, algo) -> dossier de modeles --
 # Convention : models/{algo}_{env}/ ou models/{algo}/ pour les anciens
@@ -121,6 +126,19 @@ def extract_distance(info: dict) -> float:
     return float("nan")
 
 
+def detection_loop(detector):
+    global _latest_cube_pos
+    while not _stop_detection.is_set():
+        result = detector.get_positions(show_preview=False)
+        if result and len(result) > 0:
+            pos = np.array(result[0].get('position_m'), dtype=np.float32)
+            pos[0] -= 0.0
+            pos[1] -= 0.0
+            pos[2] = 0.0
+            with _cube_pos_lock:
+                _latest_cube_pos = pos
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test des modeles entraines")
     parser.add_argument("--env", required=True, choices=list(ENVS.keys()),
@@ -142,53 +160,60 @@ if __name__ == "__main__":
     model = ALGO_CLS[args.algo].load(str(model_path), env=env)
 
     rewards, successes, distances = [], [], []
-    detector = None
+
     if args.real:
         sim_to_real.init_real_robot()
         detector = DetectionModule("../../best.pt", 0.045)
-    for ep in range(args.episodes):
-        obs, _ = env.reset()
-        done = False
-        total_reward = 0.0
+        detection_thread = threading.Thread(target=detection_loop, args=(detector,), daemon=True)
+        detection_thread.start()
 
-        while not done:
-            result = detector.get_positions()
-            # env._inner.sim.set_cube_pose(np.ndarray([result]))
-            if result is not None:
-                if len(result) > 0:
-                    cube_pos = result[0].get('position_m')
+    try:
+        for ep in range(args.episodes):
+            obs, _ = env.reset()
+            done = False
+            total_reward = 0.0
 
-                    # Defines a small shift in order to have the exact sim-to-real coords for the robot
-                    cube_pos = np.array(cube_pos, dtype=np.float32)
-                    cube_pos[0] -= 0.0
-                    cube_pos[1] -= 0.0
-                    cube_pos[2] = 0
+            while not done:
+                # Just read the latest position, non-blocking
+                with _cube_pos_lock:
+                    pos = _latest_cube_pos
+                if pos is not None and args.real:
+                    env._inner.sim.set_cube_pose(pos)
 
-                    env._inner.sim.set_cube_pose(cube_pos)
-            action, _ = model.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = env.step(action)
+                # Show annotated frame from main thread
+                if args.real:
+                    frame = detector.get_last_frame()
+                    if frame is not None:
+                        cv2.imshow('Detection 3D', frame)
+                cv2.waitKey(1)
 
+                action, _ = model.predict(obs, deterministic=True)
+                obs, reward, terminated, truncated, info = env.step(action)
+
+                if args.real:
+                    motor_joints = env._inner.sim.get_qpos()
+                    sim_to_real.update_real_robot_position(motor_joints)
+
+                env.render()
+                total_reward += reward
+                done = terminated or truncated
+                if args.delay > 0:
+                    time.sleep(args.delay)
+
+            rewards.append(total_reward)
+            successes.append(info.get("is_success", False))
+            dist_value = extract_distance(info)
+            distances.append(dist_value)
+
+            print(f"Ep {ep + 1:3d}: reward={total_reward:7.2f}  "
+                  f"success={info.get('is_success', False)}  dist={dist_value:.4f}")
+    finally:
+            _stop_detection.set()
             if args.real:
-                motor_joints = env._inner.sim.get_qpos()
-                sim_to_real.update_real_robot_position(motor_joints)
-
-            env.render()
-            total_reward += reward
-            done = terminated or truncated
-            if args.delay > 0:
-                time.sleep(args.delay)
-
-        rewards.append(total_reward)
-        successes.append(info.get("is_success", False))
-        dist_value = extract_distance(info)
-        distances.append(dist_value)
-
-        print(f"Ep {ep + 1:3d}: reward={total_reward:7.2f}  "
-              f"success={info.get('is_success', False)}  dist={dist_value:.4f}")
-
-    if args.real:
-        sim_to_real.close_real_robot()
-    env.close()
+                detection_thread.join(timeout=3)
+                sim_to_real.close_real_robot()
+                detector.close()
+            env.close()
 
     print(f"\n--- {args.env} | {args.algo} | {args.episodes} episodes ---")
     print(f"Reward : {np.mean(rewards):.2f} +/- {np.std(rewards):.2f}")

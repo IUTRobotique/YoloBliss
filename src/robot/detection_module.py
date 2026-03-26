@@ -40,6 +40,7 @@ class DetectionModule:
         self.config = rs.config()
         self.config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 15)
         self.config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 15)
+        self._last_display_frame = None
 
         # Démarrage initial pour récupérer les intrinsèques
         profile = self.pipeline.start(self.config)
@@ -93,59 +94,30 @@ class DetectionModule:
     # Public API
     # ------------------------------------------------------------------
 
-    def get_positions(
-        self,
-        confidence_threshold: float = 0.5,
-        target_classes: list[str] | None = None,
-        show_preview: bool = True,
-        window_name: str = 'Detection 3D',
-    ) -> list[dict] | None:
-        """
-        Capture une frame et retourne les positions des objets détectés
-        dans le repère du marqueur ArUco 6.
-
-        Args:
-            confidence_threshold: Score minimum YOLO pour retenir une détection.
-            target_classes:       Liste de noms de classes à garder
-                                  (ex: ['cube', 'cylinder']).
-                                  None = toutes les classes.
-            show_preview:         Affiche la fenêtre OpenCV annotée.
-            window_name:          Titre de la fenêtre OpenCV.
-
-        Returns:
-            Liste de dicts  [{'class': str, 'confidence': float,
-                               'position_m': (x, y, z)}]
-            où position_m est en mètres dans le repère du marqueur 6.
-
-            Retourne None si le marqueur 6 n'est pas visible dans cette frame.
-        """
+    def get_positions(self, confidence_threshold=0.5, target_classes=None,
+                      show_preview=True, window_name='Detection 3D'):
         color_image, depth_frame = self._capture_frame()
-        display_image = color_image.copy() if show_preview else None
+        display_image = color_image.copy()  # always build it
 
-        # --- ArUco : cherche tous les marqueurs ---
         aruco_poses = self._get_all_aruco_poses(color_image)
         marker_6_pose = aruco_poses.get(0, None)
 
-        if show_preview:
-            self._draw_aruco_markers(display_image, aruco_poses)
+        self._draw_aruco_markers(display_image, aruco_poses)  # always annotate
 
         if marker_6_pose is None:
-            if show_preview:
-                cv2.putText(display_image,
-                            "MARQUEUR 6 NON DETECTE - Repere monde indisponible",
-                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-                self._show(display_image, window_name)
+            cv2.putText(display_image, "MARQUEUR 6 NON DETECTE - Repere monde indisponible",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            self._last_display_frame = display_image
             return None
 
-        # --- YOLO ---
         results = self.model(color_image, verbose=False)
         detections = []
         info_lines = []
 
         for result in results:
             for box in result.boxes:
-                conf       = float(box.conf[0].cpu().numpy())
-                cls        = int(box.cls[0].cpu().numpy())
+                conf = float(box.conf[0].cpu().numpy())
+                cls = int(box.cls[0].cpu().numpy())
                 class_name = self.model.names[cls]
 
                 if conf < confidence_threshold:
@@ -153,42 +125,33 @@ class DetectionModule:
                 if target_classes is not None and class_name not in target_classes:
                     continue
 
-                bbox      = box.xyxy[0].cpu().numpy()
+                bbox = box.xyxy[0].cpu().numpy()
                 point_cam = self._bbox_depth_center(bbox, depth_frame)
                 if point_cam is None:
                     continue
 
                 point_world = self._camera_to_marker(
-                    point_cam,
-                    marker_6_pose['rvec'],
-                    marker_6_pose['tvec'],
-                )
+                    point_cam, marker_6_pose['rvec'], marker_6_pose['tvec'])
 
                 detections.append({
-                    'class':      class_name,
+                    'class': class_name,
                     'confidence': round(conf, 3),
                     'position_m': tuple(point_world.tolist()),
                 })
-
                 info_lines.append(
                     f"{class_name}: "
-                    f"Cam({point_cam[0]*100:.1f}, {point_cam[1]*100:.1f}, {point_cam[2]*100:.1f}) cm"
-                    f" -> M6({point_world[0]*100:.1f}, {point_world[1]*100:.1f}, {point_world[2]*100:.1f}) cm"
+                    f"Cam({point_cam[0] * 100:.1f}, {point_cam[1] * 100:.1f}, {point_cam[2] * 100:.1f}) cm"
+                    f" -> M6({point_world[0] * 100:.1f}, {point_world[1] * 100:.1f}, {point_world[2] * 100:.1f}) cm"
                 )
+                self._draw_detection(display_image, bbox, class_name, conf, point_cam, point_world)
 
-                if show_preview:
-                    self._draw_detection(display_image, bbox, class_name, conf,
-                                         point_cam, point_world)
+        y = 60
+        for line in info_lines:
+            cv2.putText(display_image, line, (10, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+            y += 18
 
-        if show_preview:
-            # Affiche les lignes de résumé en haut (comme l'original)
-            y = 60
-            for line in info_lines:
-                cv2.putText(display_image, line, (10, y),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-                y += 18
-            self._show(display_image, window_name)
-
+        self._last_display_frame = display_image  # always store
         return detections
 
     def close(self):
@@ -299,10 +262,11 @@ class DetectionModule:
                     f"M6:  ({pw[0]:.1f}, {pw[1]:.1f}, {pw[2]:.1f}) cm",
                     (x1, y1 - 5),  cv2.FONT_HERSHEY_SIMPLEX, 0.4, WHITE, 2)
 
-    @staticmethod
-    def _show(image, window_name):
-        cv2.imshow(window_name, image)
-        cv2.waitKey(1)
+    def _show(self, image, window_name):
+        self._last_display_frame = image
+
+    def get_last_frame(self):
+        return self._last_display_frame
 
     def _bbox_depth_center(self, bbox, depth_frame) -> np.ndarray | None:
         """
