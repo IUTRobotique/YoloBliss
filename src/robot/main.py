@@ -145,7 +145,7 @@ if __name__ == "__main__":
     detector = None
     if args.real:
         sim_to_real.init_real_robot()
-        detector = DetectionModule("../best.pt", 0.045)
+        detector = DetectionModule("../../best.pt", 0.045)
     for ep in range(args.episodes):
         obs, _ = env.reset()
         done = False
