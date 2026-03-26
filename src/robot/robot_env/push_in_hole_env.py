@@ -192,7 +192,6 @@ class PushInHoleEnv(gym.Env):
         cube_quat = np.array([np.cos(cube_yaw / 2), 0.0, 0.0, np.sin(cube_yaw / 2)])
         self.sim.set_cube_pose(pos=cube_pos, quat=cube_quat)
         self.sim.forward()
-        
         marker_quat = np.array([
             np.cos(self._marker_yaw / 2), 0.0, 0.0, np.sin(self._marker_yaw / 2)
         ])
