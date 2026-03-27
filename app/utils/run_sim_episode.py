@@ -3,7 +3,7 @@
 Reprend la meme logique que src/robot/main.py (resolution model, envs HER, etc.)
 
 Usage:
-    python run_sim_episode.py <env_name> <main_algo> <model_path|none> <output_dir> [max_steps]
+    python run_sim_episode.py <env_name> <main_algo> <output_dir> [max_steps]
 
     main_algo : sac | ppo | crossq | her
 """
@@ -24,6 +24,40 @@ ALGO_CLS = {
     "crossq": "SAC",   # CrossQ checkpoint charge via SAC
     "her":    "SAC",
 }
+
+# -- Resolution de modele (meme logique que main.py) --
+_MODELS_DIR = Path(ROBOT_SRC) / "models"
+# Mapping HER env -> dossier (main.py a des conflits git sur ce point)
+_HER_MODEL_DIRS = {
+    "push_in_hole": "her_sac_1st_working_push_in_hole",
+    "sorting":      "her_sac_sorting",
+}
+
+
+def _resolve_model_path(env_name: str, algo: str) -> Path | None:
+    """Resout le chemin du modele comme le fait main.py."""
+    if algo == "her":
+        if env_name in _HER_MODEL_DIRS:
+            model_dir = _MODELS_DIR / _HER_MODEL_DIRS[env_name]
+        else:
+            her_dir = _MODELS_DIR / f"her_sac_{env_name}"
+            model_dir = her_dir if her_dir.exists() else _MODELS_DIR / algo
+    else:
+        specific = _MODELS_DIR / f"{algo}_{env_name}"
+        model_dir = specific if specific.exists() else _MODELS_DIR / algo
+
+    candidates = [
+        model_dir / "best_model.zip",
+        model_dir / "best_model",
+        model_dir / f"{algo}_{env_name}_final.zip",
+        model_dir / f"her_sac_{env_name}_final.zip",
+        model_dir / f"{algo}_final.zip",
+        model_dir / "her_sac_final.zip",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
 
 
 def _write(output_dir: str, data: dict) -> None:
@@ -64,16 +98,18 @@ def _make_env(env_name: str, algo: str):
         return None
 
 
-def _load_model(model_path_str: str | None, algo: str, env):
-    """Charge le modele avec la classe SB3 correspondante (comme main.py)."""
-    if not model_path_str or model_path_str == "none" or not os.path.exists(model_path_str):
+def _load_model(env_name: str, algo: str, env):
+    """Resout et charge le modele avec la classe SB3 correspondante (comme main.py)."""
+    model_path = _resolve_model_path(env_name, algo)
+    if model_path is None:
+        print(f"[run_sim] Aucun modele trouve pour env={env_name} algo={algo}", flush=True)
         return None
     cls_name = ALGO_CLS.get(algo, "SAC")
     try:
         from stable_baselines3 import SAC, PPO, TD3
         cls_map = {"SAC": SAC, "PPO": PPO, "TD3": TD3}
         if cls_name in cls_map:
-            return cls_map[cls_name].load(model_path_str, env=env)
+            return cls_map[cls_name].load(str(model_path), env=env)
     except Exception as e:
         print(f"[run_sim] Model load error: {e}", flush=True)
     return None
@@ -88,7 +124,7 @@ def _extract_distance(info: dict) -> float:
     return float("nan")
 
 
-def run_episode(env_name: str, algo: str, model_path_str: str | None,
+def run_episode(env_name: str, algo: str,
                 output_dir: str, max_steps: int = 300) -> dict:
     import numpy as np
 
@@ -99,7 +135,7 @@ def run_episode(env_name: str, algo: str, model_path_str: str | None,
         _write(output_dir, result)
         return result
 
-    model = _load_model(model_path_str, algo, env)
+    model = _load_model(env_name, algo, env)
     obs, _ = env.reset()
     total_reward, step = 0.0, 0
     frames: list[np.ndarray] = []
@@ -167,20 +203,19 @@ def run_episode(env_name: str, algo: str, model_path_str: str | None,
         "video_path":   video_path,
         "env":          env_name,
         "algo":         algo,
-        "model":        model_path_str or "random",
+        "model":        str(_resolve_model_path(env_name, algo) or "random"),
     }
     _write(output_dir, metrics)
     return metrics
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 5:
-        print("Usage: run_sim_episode.py <env> <main_algo> <model|none> <output_dir> [max_steps]")
+    if len(sys.argv) < 4:
+        print("Usage: run_sim_episode.py <env> <main_algo> <output_dir> [max_steps]")
         sys.exit(1)
     env_arg   = sys.argv[1]
     algo_arg  = sys.argv[2]
-    model_arg = sys.argv[3]
-    out_arg   = sys.argv[4]
-    steps_arg = int(sys.argv[5]) if len(sys.argv) > 5 else 300
-    result = run_episode(env_arg, algo_arg, model_arg, out_arg, steps_arg)
+    out_arg   = sys.argv[3]
+    steps_arg = int(sys.argv[4]) if len(sys.argv) > 4 else 300
+    result = run_episode(env_arg, algo_arg, out_arg, steps_arg)
     print(json.dumps(result, indent=2))

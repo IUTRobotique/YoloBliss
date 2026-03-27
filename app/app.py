@@ -262,7 +262,6 @@ with col_res:
                     proc = subprocess.run(
                         [sys.executable, RUN_EPISODE_SCRIPT,
                          env_key, _main_algo,
-                         _mpath if os.path.exists(_mpath) else "none",
                          out_dir, "300"],
                         capture_output=True, text=True,
                     )
