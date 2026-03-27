@@ -15,7 +15,7 @@ import numpy as np
 
 
 # Chemin vers la scène MuJoCo
-SCENE_XML = os.path.join(os.path.dirname(__file__), "/robot_env/scene_push.xml")
+SCENE_XML = os.path.join(os.path.dirname(__file__), "robot_env/scene_push.xml")
 
 # Pas de simulation MuJoCo par défaut (s)
 DEFAULT_SIM_DT: float = 0.005   # 5 ms => 200 Hz
@@ -365,8 +365,8 @@ class Sim3Dofs:
         """Effectue le rendu selon ``self.render_mode``."""
         if self.render_mode == "human":
             if self._viewer is None:
-                import mujoco.viewer
-                self._viewer = mujoco.viewer.launch_passive(self.model, self.data)
+                from mujoco import viewer as _mj_viewer
+                self._viewer = _mj_viewer.launch_passive(self.model, self.data)
             self._viewer.sync()
             return None
 

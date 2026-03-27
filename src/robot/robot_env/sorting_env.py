@@ -2,6 +2,10 @@
 
 L'effecteur final doit trier deux objets (un cube et un cylindre) en les
 poussant chacun vers sa zone cible respective.
+
+La structure du reward et du curriculum est calquee sur PushInHoleEnv
+qui fonctionne bien. L'agent verrouille sa cible sur un objet jusqu'a
+ce qu'il soit trie, puis passe a l'autre.
 """
 
 from __future__ import annotations
@@ -21,58 +25,47 @@ SCENE_XML = os.path.join(os.path.dirname(__file__), "scene_sorting.xml")
 GOAL_CUBE_POS = np.array([0.20, -0.06, 0.0])
 GOAL_CYLINDER_POS = np.array([0.20, 0.06, 0.0])
 
-# Bornes pour le tirage aleatoire des positions initiales des objets
-OBJ_X_RANGE = (0.06, 0.20)
-OBJ_Y_RANGE = (-0.10, 0.10)
-OBJ_Z = 0.0135  # demi-cote, pose sur le sol
-
-# Distance minimale par rapport a la base du robot (m)
-MIN_BASE_DIST = 0.15
-
-# Distance min entre les deux objets au spawn (m)
-MIN_OBJ_DIST = 0.04
-
-# Distance min entre un objet et sa cible au spawn (m)
-MIN_OBJ_GOAL_DIST = 0.04
+# Tirage en anneau autour du robot
+OBJ_Z = 0.0135
+OBJ_DIST_MIN = 0.12   # pas trop pres de la base (m)
+OBJ_DIST_MAX = 0.23   # portee max du robot (m)
 
 # Seuil de succes : objet a moins de cette distance de sa cible (m)
-SUCCESS_THRESHOLD = 0.03
+SUCCESS_THRESHOLD = 0.05
 
 # Duree max d'un episode
 MAX_EPISODE_STEPS = 400
 
-# Coefficient de penalite pour le lissage des actions
+# Coefficient de penalite pour le lissage des actions (idem push_in_hole)
 ACTION_RATE_COEFF = 0.01
 
-# Penalite temporelle par step
-STEP_TIME_PENALTY = 0.01
+# Penalite temporelle par step (idem push_in_hole)
+STEP_TIME_PENALTY = 0.05
 
-# Seuil de saturation de l'approche effecteur -> objet le plus proche (m)
+# Seuil de saturation de l'approche effecteur -> objet cible (m)
 APPROACH_SATURATION_DIST = 0.03
 
 
 class SortingEnv(gym.Env):
     """Env Gymnasium : trier un cube et un cylindre vers leurs zones cibles.
 
-    Observation (dim 24) :
+    Observation (dim 18) :
         - qpos                    (3)  positions articulaires
         - ee_pos                  (3)  position cartesienne de l'effecteur
         - cube_pos                (3)  position du cube
         - cylinder_pos            (3)  position du cylindre
-        - ee_to_cube              (3)  vecteur effecteur -> cube
-        - ee_to_cylinder          (3)  vecteur effecteur -> cylindre
         - cube_to_goal            (3)  vecteur cube -> sa cible
         - cylinder_to_goal        (3)  vecteur cylindre -> sa cible
 
     Action (dim 3) :
         - positions articulaires cibles (envoyees aux actionneurs MuJoCo)
 
-    Reward (dense) :
-        - approche vers l'objet le plus eloigne de sa cible
-        - distance cube -> cible cube
-        - distance cylindre -> cible cylindre
-        - bonus par objet trie + bonus si les deux sont tries
-        - penalite de lissage + pression temporelle
+    Reward (calque sur PushInHoleEnv, applique a l'objet cible verrouille) :
+        -2.0 * max(0, dist(ee, target_obj) - 3cm)   approche saturee
+        -5.0 * dist_xy(target_obj, goal)             pousser vers la cible
+        +100  si l'objet cible atteint sa zone
+        -STEP_TIME_PENALTY                           pression temporelle
+        -ACTION_RATE_COEFF * ||a_t - a_{t-1}||^2    lissage
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 25}
@@ -82,13 +75,11 @@ class SortingEnv(gym.Env):
 
         self.render_mode = render_mode
 
-        # Simulation MuJoCo
         self.sim = Sim3Dofs(
             render_mode=render_mode,
             scene_xml=SCENE_XML,
         )
 
-        # Espaces
         n_act = self.sim.n_actuators  # 3
 
         act_limit = 2.618
@@ -99,8 +90,8 @@ class SortingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Observations : 8 x 3 = 24
-        obs_high = np.full(24, np.inf, dtype=np.float32)
+        # Observations : 6 x 3 = 18
+        obs_high = np.full(18, np.inf, dtype=np.float32)
         self.observation_space = spaces.Box(
             low=-obs_high,
             high=obs_high,
@@ -114,61 +105,77 @@ class SortingEnv(gym.Env):
         # Etat interne
         self._prev_action: np.ndarray = np.zeros(n_act)
         self._step_count: int = 0
-        # Distances precedentes pour le reward de progres
-        self._prev_dist_ee_target: float = 0.0
-        self._prev_dist_cube_goal: float = 0.0
-        self._prev_dist_cyl_goal: float = 0.0
+        # Cible verrouillee : "cube" ou "cylinder"
+        self._current_target: str = "cube"
 
     # -- Helpers --
 
-    def _sample_obj_pos(self, exclude_positions: list[np.ndarray] | None = None) -> np.ndarray:
-        """Tire une position au sol, eloignee de la base et des positions exclues."""
-        for _ in range(200):
-            pos = np.array([
-                self.np_random.uniform(*OBJ_X_RANGE),
-                self.np_random.uniform(*OBJ_Y_RANGE),
-                OBJ_Z,
-            ])
-            if np.linalg.norm(pos[:2]) < MIN_BASE_DIST:
-                continue
-            # Verifier la distance par rapport aux positions exclues
-            too_close = False
-            if exclude_positions:
-                for other in exclude_positions:
-                    if np.linalg.norm(pos[:2] - other[:2]) < MIN_OBJ_DIST:
-                        too_close = True
-                        break
-            if too_close:
-                continue
-            # Verifier que l'objet n'est pas deja sur sa cible
-            if (np.linalg.norm(pos[:2] - self._goal_cube[:2]) < MIN_OBJ_GOAL_DIST
-                    or np.linalg.norm(pos[:2] - self._goal_cylinder[:2]) < MIN_OBJ_GOAL_DIST):
-                continue
-            return pos
-        # Fallback
-        return np.array([0.10, 0.04, OBJ_Z])
+    def _sample_obj_pos(self) -> np.ndarray:
+        """Position aleatoire en anneau autour du robot avec validation."""
+        for _ in range(100):
+            angle = self.np_random.uniform(-np.pi, np.pi)
+            dist = self.np_random.uniform(OBJ_DIST_MIN, OBJ_DIST_MAX)
+            pos = np.array([dist * np.cos(angle), dist * np.sin(angle), OBJ_Z])
+            
+            # Verifier que l'objet est bien a la distance minimum du robot
+            dist_from_base = float(np.linalg.norm(pos[:2]))
+            if dist_from_base >= OBJ_DIST_MIN:
+                return pos
+        
+        # Fallback : position garantie valide
+        angle = self.np_random.uniform(-np.pi, np.pi)
+        pos = np.array([OBJ_DIST_MIN * np.cos(angle), OBJ_DIST_MIN * np.sin(angle), OBJ_Z])
+        return pos
+
+    def _choose_target(self) -> str:
+        """Choisit quel objet cibler : celui qui n'est PAS encore trie.
+        Si aucun n'est trie, commence par le cube."""
+        cube_pos = self.sim.get_cube_pos()
+        cylinder_pos = self.sim.get_cylinder_pos()
+        dist_cube = float(np.linalg.norm(cube_pos[:2] - self._goal_cube[:2]))
+        dist_cyl = float(np.linalg.norm(cylinder_pos[:2] - self._goal_cylinder[:2]))
+        cube_done = dist_cube < SUCCESS_THRESHOLD
+        cyl_done = dist_cyl < SUCCESS_THRESHOLD
+        if cube_done and not cyl_done:
+            return "cylinder"
+        if cyl_done and not cube_done:
+            return "cube"
+        # Aucun ou les deux tries : garder la cible actuelle
+        return self._current_target
+
+    def _get_target_obj_pos(self) -> np.ndarray:
+        if self._current_target == "cube":
+            return self.sim.get_cube_pos()
+        return self.sim.get_cylinder_pos()
+
+    def _get_target_goal_pos(self) -> np.ndarray:
+        if self._current_target == "cube":
+            return self._goal_cube
+        return self._goal_cylinder
 
     def _get_obs(self) -> np.ndarray:
-        """Construit le vecteur d'observation."""
+        """Construit le vecteur d'observation avec bruit (Sim-to-Real)."""
         qpos = self.sim.get_qpos()
         ee_pos = self.sim.get_end_effector_pos()
         cube_pos = self.sim.get_cube_pos()
         cylinder_pos = self.sim.get_cylinder_pos()
 
-        ee_to_cube = cube_pos - ee_pos
-        ee_to_cylinder = cylinder_pos - ee_pos
+        # Bruit sim-to-real (idem push_in_hole)
+        qpos = qpos + self.np_random.normal(0, 0.005, size=qpos.shape)
+        cube_pos = cube_pos + self.np_random.normal(0, 0.002, size=cube_pos.shape)
+        cylinder_pos = cylinder_pos + self.np_random.normal(0, 0.002, size=cylinder_pos.shape)
+
         cube_to_goal = self._goal_cube - cube_pos
         cylinder_to_goal = self._goal_cylinder - cylinder_pos
 
         return np.concatenate([
             qpos, ee_pos,
             cube_pos, cylinder_pos,
-            ee_to_cube, ee_to_cylinder,
             cube_to_goal, cylinder_to_goal,
         ]).astype(np.float32)
 
     def _compute_reward(self, action: np.ndarray) -> tuple[float, bool, bool, bool]:
-        """Calcule la recompense.
+        """Reward calque sur PushInHoleEnv, applique a l'objet cible verrouille.
 
         Returns : (reward, cube_sorted, cylinder_sorted, both_sorted)
         """
@@ -183,52 +190,32 @@ class SortingEnv(gym.Env):
         cyl_sorted = dist_cyl_goal < SUCCESS_THRESHOLD
         both_sorted = cube_sorted and cyl_sorted
 
-        # Approche : guider l'effecteur vers l'objet le plus proche de sa cible
-        if dist_cube_goal <= dist_cyl_goal:
-            target_obj = cube_pos
-            dist_target_goal = dist_cube_goal
-            prev_dist_target_goal = self._prev_dist_cube_goal
-        else:
-            target_obj = cylinder_pos
-            dist_target_goal = dist_cyl_goal
-            prev_dist_target_goal = self._prev_dist_cyl_goal
-        dist_ee_target = float(np.linalg.norm(ee_pos - target_obj))
+        # Mettre a jour la cible verrouillee
+        self._current_target = self._choose_target()
+
+        # Positions de l'objet cible et de son goal
+        target_pos = self._get_target_obj_pos()
+        target_goal = self._get_target_goal_pos()
+        dist_ee_target = float(np.linalg.norm(ee_pos - target_pos))
+        dist_target_goal = float(np.linalg.norm(target_pos[:2] - target_goal[:2]))
+
+        # Terme d'approche sature (idem push_in_hole)
         approach_dist = max(0.0, dist_ee_target - APPROACH_SATURATION_DIST)
         reward = -2.0 * approach_dist
 
-        # Reward de progres : EE se rapproche de la piece cible
-        approach_progress = self._prev_dist_ee_target - dist_ee_target
-        reward += 1.0 * approach_progress
+        # Objectif principal : pousser l'objet cible vers son goal (idem push_in_hole)
+        reward -= 5.0 * dist_target_goal
 
-        # Reward de progres : la piece cible se rapproche de son goal
-        target_progress = prev_dist_target_goal - dist_target_goal
-        reward += 30.0 * target_progress
-
-        # Objectif principal : rapprocher chaque objet de sa cible
-        # reward -= 3.0 * dist_cube_goal
-        # reward -= 3.0 * dist_cyl_goal
-
-        # Bonus par objet trie
-        if cube_sorted:
-            reward += 20.0
-        if cyl_sorted:
-            reward += 20.0
-
-        # Bonus termine
-        if both_sorted:
-            reward += 50.0
-
-        # Pression temporelle
+        # Pression temporelle (idem push_in_hole)
         reward -= STEP_TIME_PENALTY
 
-        # Lissage des commandes
+        # Bonus succes uniquement quand les deux sont tries
+        if both_sorted:
+            reward += 200.0
+
+        # Lissage des commandes (idem push_in_hole)
         action_rate = float(np.sum((action - self._prev_action) ** 2))
         reward -= ACTION_RATE_COEFF * action_rate
-
-        # Mise a jour des distances precedentes pour le prochain step
-        self._prev_dist_ee_target = dist_ee_target
-        self._prev_dist_cube_goal = dist_cube_goal
-        self._prev_dist_cyl_goal = dist_cyl_goal
 
         return reward, cube_sorted, cyl_sorted, both_sorted
 
@@ -261,16 +248,20 @@ class SortingEnv(gym.Env):
         reward = -dist_cube - dist_cyl
         cube_sorted = (dist_cube < SUCCESS_THRESHOLD).astype(np.float32)
         cyl_sorted = (dist_cyl < SUCCESS_THRESHOLD).astype(np.float32)
-        reward += 20.0 * cube_sorted + 20.0 * cyl_sorted + 50.0 * (cube_sorted * cyl_sorted)
+        reward += 100.0 * cube_sorted + 100.0 * cyl_sorted
         return reward
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         self.sim.reset()
 
-        # Sampling des positions initiales des objets
         cube_pos = self._sample_obj_pos()
-        cylinder_pos = self._sample_obj_pos(exclude_positions=[cube_pos])
+        cylinder_pos = self._sample_obj_pos()
+        # Verifier que les objets ne se chevauchent pas
+        for _ in range(50):
+            if np.linalg.norm(cube_pos[:2] - cylinder_pos[:2]) >= OBJ_DIST_MIN:
+                break
+            cylinder_pos = self._sample_obj_pos()
 
         self.sim.set_cube_pose(pos=cube_pos)
         self.sim.set_cylinder_pose(pos=cylinder_pos)
@@ -282,18 +273,8 @@ class SortingEnv(gym.Env):
 
         self._prev_action = np.zeros(self.sim.n_actuators)
         self._step_count = 0
-
-        # Initialiser les distances precedentes pour le reward de progres
-        ee_pos = self.sim.get_end_effector_pos()
-        dist_cube_goal = float(np.linalg.norm(cube_pos[:2] - self._goal_cube[:2]))
-        dist_cyl_goal = float(np.linalg.norm(cylinder_pos[:2] - self._goal_cylinder[:2]))
-        if dist_cube_goal <= dist_cyl_goal:
-            target_obj = cube_pos
-        else:
-            target_obj = cylinder_pos
-        self._prev_dist_ee_target = float(np.linalg.norm(ee_pos - target_obj))
-        self._prev_dist_cube_goal = dist_cube_goal
-        self._prev_dist_cyl_goal = dist_cyl_goal
+        # Commencer par le cube (arbitraire)
+        self._current_target = "cube"
 
         info = {
             "cube_pos": cube_pos.copy(),
@@ -324,6 +305,7 @@ class SortingEnv(gym.Env):
             "cylinder_sorted": cyl_sorted,
             "dist_cube_goal": float(np.linalg.norm(cube_pos[:2] - self._goal_cube[:2])),
             "dist_cylinder_goal": float(np.linalg.norm(cylinder_pos[:2] - self._goal_cylinder[:2])),
+            "current_target": self._current_target,
         }
 
         self._prev_action = action.copy()

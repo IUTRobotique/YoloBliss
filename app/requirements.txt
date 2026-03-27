@@ -1,0 +1,29 @@
+# Dépendances de l'application Streamlit YoloBliss
+# ---------------------------------------------------------------------
+# Interface web
+streamlit>=1.40.0
+plotly>=5.24.0
+pandas>=2.0.0
+pillow>=10.0.0
+numpy>=2.0.0
+
+# Vision / détection d'objets
+# opencv-python-headless est préféré en venv sans affichage GTK
+opencv-python-headless>=4.8.0
+ultralytics>=8.4.0
+
+# RL (Reinforcement Learning)
+stable-baselines3>=2.0.0
+sb3-contrib>=2.0.0
+gymnasium>=0.29.0
+tensorboard>=2.14.0
+mujoco>=3.0.0
+
+# Deep learning  (torch CPU si pas de GPU ; remplacé par la version CUDA du
+# système si le venv est créé avec --system-site-packages depuis conda)
+torch>=2.0.0
+
+# Robot
+# dynamixel-sdk et pyrealsense2 nécessitent du matériel — commentez si absent
+dynamixel-sdk>=4.0.0
+# pyrealsense2>=2.50.0   # décommentez si une caméra RealSense est branchée

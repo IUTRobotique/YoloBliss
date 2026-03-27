@@ -56,11 +56,10 @@ APPROACH_SATURATION_DIST = 0.03
 class PushInHoleEnv(gym.Env):
     """Env Gymnasium : pousser le cube dans le trou.
 
-    Observation (dim 15) :
+    Observation (dim 12) :
         - qpos                (3)  positions articulaires
         - ee_pos              (3)  position cartesienne de l'effecteur
         - cube_pos            (3)  position du cube
-        - ee_to_cube          (3)  vecteur effecteur -> cube
         - cube_to_hole        (3)  vecteur cube -> trou
 
     Action (dim 3) :
@@ -98,8 +97,8 @@ class PushInHoleEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Observations : qpos(3) + ee(3) + cube(3) + ee_to_cube(3) + cube_to_hole(3) = 15
-        obs_high = np.full(15, np.inf, dtype=np.float32)
+        # Observations : qpos(3) + ee(3) + cube(3) + cube_to_hole(3) = 12
+        obs_high = np.full(12, np.inf, dtype=np.float32)
         self.observation_space = spaces.Box(
             low=-obs_high,
             high=obs_high,
@@ -148,10 +147,9 @@ class PushInHoleEnv(gym.Env):
         qpos += self.np_random.normal(0, 0.005, size=qpos.shape)
         cube_pos += self.np_random.normal(0, 0.002, size=cube_pos.shape)
 
-        ee_to_cube = cube_pos - ee_pos
         cube_to_hole = self._hole_pos - cube_pos
         return np.concatenate([
-            qpos, ee_pos, cube_pos, ee_to_cube, cube_to_hole,
+            qpos, ee_pos, cube_pos, cube_to_hole,
         ]).astype(np.float32)
 
     def _compute_reward(self, action: np.ndarray) -> tuple[float, bool]:
