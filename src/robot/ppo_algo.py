@@ -22,13 +22,12 @@ from stable_baselines3.common.callbacks import BaseCallback, CallbackList, EvalC
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecEnv
 
-from robot_env.push_env import PushEnv
+from robot_env.push_in_hole_env import PushInHoleEnv as PushEnv
 
-TheEnv = PushEnv
 
 #collecte on-policy sur plusieurs envs en parallèle pour diversifier les données
 N_ENVS: int = 4
-TOTAL_TIMESTEPS: int = 1_000_000
+TOTAL_TIMESTEPS: int = 500_000
 
 #rollout de N_STEPS par env avant chaque update : N_STEPS * N_ENVS transitions consommées
 N_STEPS: int = 2048
@@ -85,15 +84,15 @@ class _RenderCallback(BaseCallback):
         return True
 
 
-def make_env(render_mode: str | None =None) -> TheEnv:
-    """Crée une instance de TheEnv (factory pour make_vec_env).
+def make_env(render_mode: str | None =None) -> PushEnv:
+    """Crée une instance de PushEnv (factory pour make_vec_env).
     Parameters:
         render_mode (str | None): ``"human"`` pour afficher MuJoCo en temps réel,
             ``None`` pour l'entraînement headless (plus rapide).
     Returns:
-        TheEnv: environnement gymnasium initialisé.
+        PushEnv: environnement gymnasium initialisé.
     """
-    return TheEnv(render_mode=render_mode)
+    return PushEnv(render_mode=render_mode)
 
 
 def train(

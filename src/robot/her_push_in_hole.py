@@ -38,7 +38,7 @@ from stable_baselines3.her.her_replay_buffer import HerReplayBuffer
 
 from robot_env.push_in_hole_env import PushInHoleEnv, SUCCESS_Z_THRESHOLD, MAX_EPISODE_STEPS
 
-TOTAL_TIMESTEPS: int = 300_000
+TOTAL_TIMESTEPS: int = 500_000
 BUFFER_SIZE: int = 1_000_000
 LEARNING_STARTS: int = 5_000
 BATCH_SIZE: int = 256

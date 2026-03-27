@@ -43,14 +43,24 @@ ALGO_CLS = {
     "her": SAC,
 }
 
+SPECIAL_HER_MODELS = {
+    "her_1st": "her_sac_1st_working_push_in_hole",
+}
+
 # -- Mapping (env, algo) -> dossier de modeles --
 # Convention : models/{algo}_{env}/ ou models/{algo}/ pour les anciens
 def _model_dir(env_name: str, algo: str) -> Path:
     base = Path(os.path.dirname(__file__)) / "models"
+
+    # Special-case HER variants that have custom directory names
+    if algo in SPECIAL_HER_MODELS:
+        return base / SPECIAL_HER_MODELS[algo]
+
     # Chercher d'abord le dossier specifique env+algo
     specific = base / f"{algo}_{env_name}"
     if specific.exists():
         return specific
+
     # HER : convention her_sac_{env}
     if algo == "her":
         her_specific = base / f"her_sac_{env_name}"
@@ -60,6 +70,7 @@ def _model_dir(env_name: str, algo: str) -> Path:
         her_default = base / "her_sac"
         if her_default.exists():
             return her_default
+
     # Fallback : dossier algo seul (ancien format)
     return base / algo
 
@@ -95,7 +106,8 @@ def make_eval_env(env_name: str, algo: str, render: bool):
     env_cls = ENVS[env_name]
 
     if algo == "her":
-        # HER necessite le wrapper GoalEnv
+        # HER necessite le wrapper GoalEnv.
+        # Le checkpoint HER PushInHole historique a été entraîné sur un GoalEnv (obs dict), pas sur PushEnv.
         if env_name == "push_in_hole":
             from her_push_in_hole import PushInHoleGoalEnv
             return PushInHoleGoalEnv(render_mode=render_mode)
@@ -103,8 +115,11 @@ def make_eval_env(env_name: str, algo: str, render: bool):
             from her_sorting import SortingGoalEnv
             return SortingGoalEnv(render_mode=render_mode)
         else:
+            # Si tu veux un fallback silencieux sur l'env non-goal, tu peux
+            # remplacer cette ligne par `return env_cls(render_mode=render_mode)`
             raise ValueError(f"HER non supporte pour l'env '{env_name}' (pas de goal)")
 
+    # Pour les autres algo, on renvoie simplement la classe d'env normale
     return env_cls(render_mode=render_mode)
 
 
